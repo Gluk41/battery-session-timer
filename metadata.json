@@ -1,0 +1,8 @@
+{
+  "name": "Battery Session Timer",
+  "description": "Индикатор времени бодрствования ноутбука от батареи с сохранением рекорда",
+  "uuid": "battery-session-timer@local",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "session-modes": ["user", "unlock-dialog"],
+  "version": 5
+}
