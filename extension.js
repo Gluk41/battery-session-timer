@@ -565,6 +565,9 @@ export default class BatteryTimerExtension extends Extension {
         });
     }
 
+    // Синхронный ввод-вывод используется для чтения/записи небольших файлов
+    // настроек. Данные малы, операции выполняются редко, и асинхронная версия
+    // значительно усложнила бы код без реальной выгоды.
     _loadRecord() {
         try {
             const file = Gio.File.new_for_path(this._recordFile);
@@ -693,6 +696,9 @@ export default class BatteryTimerExtension extends Extension {
     }
 
     disable() {
+        // Расширение использует режим unlock-dialog для отображения индикатора
+        // на экране блокировки, чтобы пользователь мог видеть время работы
+        // от батареи даже до входа в систему.
         if (!this._enabled)
             return;
 
