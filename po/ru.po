@@ -1,0 +1,49 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Battery Session Timer 1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"PO-Revision-Date: 2026-08-16\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+# Строки в меню
+msgid "Left (after Activities)"
+msgstr "Слева (после Обзора)"
+
+msgid "Center (before clock)"
+msgstr "По центру (перед часами)"
+
+msgid "Center (after clock)"
+msgstr "По центру (после часов)"
+
+msgid "Right (before indicators)"
+msgstr "Справа (перед индикаторами)"
+
+msgid "Reset record"
+msgstr "Сбросить рекорд"
+
+# Строки в UI
+msgid " No data"
+msgstr " Нет данных"
+
+msgid "UPower unavailable"
+msgstr "UPower недоступен"
+
+msgid " No battery"
+msgstr " Нет батареи"
+
+msgid "Battery not detected"
+msgstr "Батарея не обнаружена"
+
+msgid "Current session: power plugged in"
+msgstr "Текущая сессия: питание подключено"
+
+msgid "Current session"
+msgstr "Текущая сессия"
+
+msgid "Record"
+msgstr "Рекорд"
