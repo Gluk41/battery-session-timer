@@ -77,7 +77,6 @@ const PANEL_PLACEMENT = Object.freeze({
 
 export default class BatteryTimerExtension extends Extension {
     enable() {
-        this._enabled = true;
         this._proxyGeneration = 0;
         this._logindGeneration = 0;
         this._timeoutId = 0;
@@ -135,6 +134,10 @@ export default class BatteryTimerExtension extends Extension {
         this._watchUPower();
         this._watchLogind();
 
+        if (this._timeoutId) {
+            GLib.Source.remove(this._timeoutId);
+            this._timeoutId = 0;
+        }
         this._timeoutId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
             UPDATE_INTERVAL_SECONDS,
@@ -166,11 +169,11 @@ export default class BatteryTimerExtension extends Extension {
             UPOWER_NAME,
             UPOWER_PATH,
             (proxy, error) => {
-                if (!this._enabled || generation !== this._proxyGeneration)
+                if (generation !== this._proxyGeneration)
                     return;
 
                 if (error) {
-                    console.error(`Battery Session Timer: UPower error`);
+                    console.error('Battery Session Timer: UPower error');
                     this._setPowerUnavailable();
                     return;
                 }
@@ -190,11 +193,11 @@ export default class BatteryTimerExtension extends Extension {
             UPOWER_NAME,
             DISPLAY_DEVICE_PATH,
             (proxy, error) => {
-                if (!this._enabled || generation !== this._proxyGeneration)
+                if (generation !== this._proxyGeneration)
                     return;
 
                 if (error) {
-                    console.error(`Battery Session Timer: UPower error`);
+                    console.error('Battery Session Timer: UPower error');
                     this._setPowerUnavailable();
                     return;
                 }
@@ -211,9 +214,6 @@ export default class BatteryTimerExtension extends Extension {
     }
 
     _onUPowerVanished() {
-        if (!this._enabled)
-            return;
-
         this._proxyGeneration++;
         this._clearUPowerProxies();
         this._setPowerUnavailable();
@@ -221,18 +221,15 @@ export default class BatteryTimerExtension extends Extension {
 
     _clearUPowerProxies() {
         for (const [proxy, signalId] of this._upowerSignalIds) {
-            try {
-                proxy.disconnect(signalId);
-            } catch (_) {}
+            proxy.disconnect(signalId);
         }
-
         this._upowerSignalIds = [];
         this._upowerProxy = null;
         this._deviceProxy = null;
     }
 
     _syncPowerState() {
-        if (!this._enabled || !this._upowerProxy || !this._deviceProxy)
+        if (!this._upowerProxy || !this._deviceProxy)
             return;
 
         const before = this._tracker.snapshot();
@@ -248,7 +245,6 @@ export default class BatteryTimerExtension extends Extension {
 
         const after = this._tracker.snapshot();
 
-        // Проверка изменения заряда во время сна
         if (after.sessionActive && after.onBattery && this._resumedChargePercent !== null) {
             const currentCharge = Number(this._deviceProxy.Percentage);
             if (!isNaN(currentCharge) && currentCharge >= 0 && currentCharge <= 100) {
@@ -307,7 +303,7 @@ export default class BatteryTimerExtension extends Extension {
             LOGIND_NAME,
             LOGIND_PATH,
             (proxy, error) => {
-                if (!this._enabled || generation !== this._logindGeneration)
+                if (generation !== this._logindGeneration)
                     return;
 
                 if (error) {
@@ -326,9 +322,6 @@ export default class BatteryTimerExtension extends Extension {
     }
 
     _onLogindVanished() {
-        if (!this._enabled)
-            return;
-
         this._logindGeneration++;
         this._clearLogindProxy();
         this._tracker.setSleeping(false, this._nowUs());
@@ -337,19 +330,13 @@ export default class BatteryTimerExtension extends Extension {
 
     _clearLogindProxy() {
         if (this._logindProxy && this._logindSignalId) {
-            try {
-                this._logindProxy.disconnectSignal(this._logindSignalId);
-            } catch (_) {}
+            this._logindProxy.disconnectSignal(this._logindSignalId);
         }
-
         this._logindSignalId = 0;
         this._logindProxy = null;
     }
 
     _onPrepareForSleep(sleeping) {
-        if (!this._enabled)
-            return;
-
         this._tracker.setSleeping(Boolean(sleeping), this._nowUs());
 
         if (sleeping) {
@@ -363,9 +350,6 @@ export default class BatteryTimerExtension extends Extension {
     }
 
     _syncIndicatorForSessionMode() {
-        if (!this._enabled)
-            return;
-
         const showIndicator = Main.sessionMode.currentMode === 'user' ||
             Main.sessionMode.parentMode === 'user';
 
@@ -478,14 +462,16 @@ export default class BatteryTimerExtension extends Extension {
         this._position = position;
         this._savePosition();
 
-        if (this._rebuildId)
-            return;
+        if (this._rebuildId) {
+            GLib.Source.remove(this._rebuildId);
+            this._rebuildId = 0;
+        }
 
         this._rebuildId = GLib.idle_add(
             GLib.PRIORITY_DEFAULT_IDLE,
             () => {
                 this._rebuildId = 0;
-                if (this._enabled && this._indicator) {
+                if (this._indicator) {
                     this._destroyIndicator();
                     this._syncIndicatorForSessionMode();
                 }
@@ -678,39 +664,43 @@ export default class BatteryTimerExtension extends Extension {
     }
 
     disable() {
-        // This extension uses unlock-dialog session mode to show the indicator
-        // on the lock screen so users can see the battery timer before logging in.
-        if (!this._enabled)
-            return;
-
-        this._tracker.tick(this._nowUs());
-        const state = this._tracker.snapshot();
-        this._saveRecordIfDirty();
-        this._saveSessionState(state);
-        this._enabled = false;
-
-        if (this._timeoutId)
-            GLib.Source.remove(this._timeoutId);
-        if (this._rebuildId)
-            GLib.Source.remove(this._rebuildId);
-        if (this._sessionModeSignalId)
-            Main.sessionMode.disconnect(this._sessionModeSignalId);
-        if (this._upowerWatchId)
-            Gio.bus_unwatch_name(this._upowerWatchId);
-        if (this._logindWatchId)
-            Gio.bus_unwatch_name(this._logindWatchId);
-
         this._proxyGeneration++;
         this._logindGeneration++;
+
+        if (this._tracker) {
+            this._tracker.tick(this._nowUs());
+            const state = this._tracker.snapshot();
+            this._saveRecordIfDirty();
+            this._saveSessionState(state);
+        }
+
+        if (this._timeoutId) {
+            GLib.Source.remove(this._timeoutId);
+            this._timeoutId = 0;
+        }
+        if (this._rebuildId) {
+            GLib.Source.remove(this._rebuildId);
+            this._rebuildId = 0;
+        }
+
+        if (this._sessionModeSignalId) {
+            Main.sessionMode.disconnect(this._sessionModeSignalId);
+            this._sessionModeSignalId = 0;
+        }
+
+        if (this._upowerWatchId) {
+            Gio.bus_unwatch_name(this._upowerWatchId);
+            this._upowerWatchId = 0;
+        }
+        if (this._logindWatchId) {
+            Gio.bus_unwatch_name(this._logindWatchId);
+            this._logindWatchId = 0;
+        }
+
         this._clearUPowerProxies();
         this._clearLogindProxy();
         this._destroyIndicator();
 
-        this._timeoutId = 0;
-        this._rebuildId = 0;
-        this._sessionModeSignalId = 0;
-        this._upowerWatchId = 0;
-        this._logindWatchId = 0;
         this._tracker = null;
     }
 }
