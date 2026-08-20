@@ -26,9 +26,9 @@ export default class BatteryTimerExtension extends Extension {
         this._loadAndStart();
     }
 
-    // This extension uses unlock-dialog session mode to show the indicator
-    // on the lock screen so users can see the battery timer before logging in.
     disable() {
+        // This extension uses unlock-dialog session mode to show the indicator
+        // on the lock screen so users can see the battery timer before logging in.
         if (this._timeoutId) {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = 0;
