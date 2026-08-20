@@ -97,14 +97,6 @@ export function getBatteryIconName({
 }
 
 export class BatterySessionTracker {
-    /**
-     * @param {number} record Previously saved record, in seconds.
-     * @param {number} resumeElapsedSeconds If the extension was restarted
-     *   (logout, reboot, manual re-enable) while still genuinely on battery,
-     *   this carries the elapsed time of that still-ongoing session so it can
-     *   continue instead of restarting from zero. Only ever applied once, to
-     *   the very first session that becomes active after construction.
-     */
     constructor(record = 0, resumeElapsedSeconds = 0) {
         this._record = decodeRecord(record).value;
         this._available = false;

@@ -1,706 +1,137 @@
-// This extension uses the "unlock-dialog" session mode to show the battery
-// timer on the lock screen, so users can see remaining battery time before
-// logging in.
-import St from 'gi://St';
 import GLib from 'gi://GLib';
-import Gio from 'gi://Gio';
-import Clutter from 'gi://Clutter';
-
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-
-import {
-    BatterySessionTracker,
-    DEFAULT_POSITION,
-    PANEL_POSITIONS,
-    decodePosition,
-    decodeRecord,
-    formatDuration,
-    getBatteryIconName,
-} from './core.js';
-
-const UPOWER_NAME = 'org.freedesktop.UPower';
-const UPOWER_PATH = '/org/freedesktop/UPower';
-const DISPLAY_DEVICE_PATH = '/org/freedesktop/UPower/devices/DisplayDevice';
-const LOGIND_NAME = 'org.freedesktop.login1';
-const LOGIND_PATH = '/org/freedesktop/login1';
-const BATTERY_DEVICE_TYPE = 2;
-const UPOWER_STATE_CHARGING = 1;
-const UPOWER_STATE_FULLY_CHARGED = 4;
-const UPDATE_INTERVAL_SECONDS = 30;
-const CHECKPOINT_INTERVAL_US = 5 * 60 * 1_000_000;
-const CHARGE_CHANGE_THRESHOLD_PERCENT = 5;
-
-const UPOWER_XML = `
-<node>
-    <interface name="org.freedesktop.UPower">
-        <property name="OnBattery" type="b" access="read"/>
-    </interface>
-</node>
-`;
-
-const UPOWER_DEVICE_XML = `
-<node>
-    <interface name="org.freedesktop.UPower.Device">
-        <property name="Percentage" type="d" access="read"/>
-        <property name="IsPresent" type="b" access="read"/>
-        <property name="Type" type="u" access="read"/>
-        <property name="State" type="u" access="read"/>
-        <property name="IconName" type="s" access="read"/>
-    </interface>
-</node>
-`;
-
-const LOGIND_XML = `
-<node>
-    <interface name="org.freedesktop.login1.Manager">
-        <signal name="PrepareForSleep">
-            <arg name="start" type="b"/>
-        </signal>
-    </interface>
-</node>
-`;
-
-const UPowerProxy = Gio.DBusProxy.makeProxyWrapper(UPOWER_XML);
-const UPowerDeviceProxy = Gio.DBusProxy.makeProxyWrapper(UPOWER_DEVICE_XML);
-const LogindProxy = Gio.DBusProxy.makeProxyWrapper(LOGIND_XML);
-
-const PANEL_PLACEMENT = Object.freeze({
-    'left-after-activities': {position: 1, box: 'left'},
-    'before-clock': {position: 0, box: 'center'},
-    'after-clock': {position: -1, box: 'center'},
-    'before-tray': {position: 0, box: 'right'},
-});
+import {FileManager} from './file-manager.js';
+import {PowerManager} from './power-manager.js';
+import {UIManager} from './ui-manager.js';
+import {BatterySessionTracker} from './core.js';
 
 export default class BatteryTimerExtension extends Extension {
     enable() {
-        this._proxyGeneration = 0;
-        this._logindGeneration = 0;
-        this._timeoutId = 0;
-        this._rebuildId = 0;
-        this._sessionModeSignalId = 0;
-        this._upowerWatchId = 0;
-        this._logindWatchId = 0;
-        this._upowerSignalIds = [];
-        this._logindSignalId = 0;
-        this._upowerProxy = null;
-        this._deviceProxy = null;
-        this._logindProxy = null;
-        this._indicator = null;
-        this._icon = null;
-        this._label = null;
-        this._sessionItem = null;
-        this._recordItem = null;
-        this._resumedChargePercent = null;
-
-        this._recordFile = GLib.build_filenamev([
-            GLib.get_user_config_dir(),
-            'battery-session-timer-record',
-        ]);
-        this._settingsFile = GLib.build_filenamev([
-            GLib.get_user_config_dir(),
-            'battery-session-timer-settings.json',
-        ]);
-        this._sessionFile = GLib.build_filenamev([
-            GLib.get_user_config_dir(),
-            'battery-session-timer-session.json',
-        ]);
-
-        const loadedRecord = this._loadRecord();
-        const loadedSession = this._loadSession();
-        this._position = this._loadPosition();
-
-        this._resumedChargePercent = loadedSession.active ? loadedSession.chargePercent : null;
-
-        this._tracker = new BatterySessionTracker(
-            loadedRecord.value,
-            loadedSession.active ? loadedSession.elapsedSeconds : 0
+        const configDir = GLib.get_user_config_dir();
+        this._fileManager = new FileManager(
+            GLib.build_filenamev([configDir, 'battery-session-timer-record']),
+            GLib.build_filenamev([configDir, 'battery-session-timer-settings.json']),
+            GLib.build_filenamev([configDir, 'battery-session-timer-session.json'])
         );
-        this._lastSavedRecord = loadedRecord.valid
-            ? loadedRecord.value
-            : null;
-        this._lastSavedSession = null;
-        this._lastCheckpointUs = this._nowUs();
 
-        this._sessionModeSignalId = Main.sessionMode.connect(
-            'updated',
-            () => this._syncIndicatorForSessionMode()
+        this._uiManager = new UIManager(
+            'before-tray',
+            null,
+            (newPos) => this._setPosition(newPos),
+            () => this._resetRecord()
         );
-        this._syncIndicatorForSessionMode();
+        this._uiManager.createIndicator(this.uuid);
+        this._uiManager.showLoading();
 
-        this._watchUPower();
-        this._watchLogind();
+        this._loadAndStart();
+    }
 
+    // This extension uses unlock-dialog session mode to show the indicator
+    // on the lock screen so users can see the battery timer before logging in.
+    disable() {
         if (this._timeoutId) {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = 0;
         }
-        this._timeoutId = GLib.timeout_add_seconds(
-            GLib.PRIORITY_DEFAULT,
-            UPDATE_INTERVAL_SECONDS,
-            () => {
-                this._onTimer();
-                return GLib.SOURCE_CONTINUE;
-            }
-        );
-
-        this._refreshUi();
-    }
-
-    _watchUPower() {
-        this._upowerWatchId = Gio.bus_watch_name(
-            Gio.BusType.SYSTEM,
-            UPOWER_NAME,
-            Gio.BusNameWatcherFlags.AUTO_START,
-            () => this._connectUPower(),
-            () => this._onUPowerVanished()
-        );
-    }
-
-    _connectUPower() {
-        const generation = ++this._proxyGeneration;
-        this._clearUPowerProxies();
-
-        new UPowerProxy(
-            Gio.DBus.system,
-            UPOWER_NAME,
-            UPOWER_PATH,
-            (proxy, error) => {
-                if (generation !== this._proxyGeneration)
-                    return;
-
-                if (error) {
-                    console.error('Battery Session Timer: UPower error');
-                    this._setPowerUnavailable();
-                    return;
-                }
-
-                this._upowerProxy = proxy;
-                const signalId = proxy.connect(
-                    'g-properties-changed',
-                    () => this._syncPowerState()
-                );
-                this._upowerSignalIds.push([proxy, signalId]);
-                this._syncPowerState();
-            }
-        );
-
-        new UPowerDeviceProxy(
-            Gio.DBus.system,
-            UPOWER_NAME,
-            DISPLAY_DEVICE_PATH,
-            (proxy, error) => {
-                if (generation !== this._proxyGeneration)
-                    return;
-
-                if (error) {
-                    console.error('Battery Session Timer: UPower error');
-                    this._setPowerUnavailable();
-                    return;
-                }
-
-                this._deviceProxy = proxy;
-                const signalId = proxy.connect(
-                    'g-properties-changed',
-                    () => this._syncPowerState()
-                );
-                this._upowerSignalIds.push([proxy, signalId]);
-                this._syncPowerState();
-            }
-        );
-    }
-
-    _onUPowerVanished() {
-        this._proxyGeneration++;
-        this._clearUPowerProxies();
-        this._setPowerUnavailable();
-    }
-
-    _clearUPowerProxies() {
-        for (const [proxy, signalId] of this._upowerSignalIds) {
-            proxy.disconnect(signalId);
+        if (this._powerManager) {
+            this._powerManager.stop();
+            this._powerManager = null;
         }
-        this._upowerSignalIds = [];
-        this._upowerProxy = null;
-        this._deviceProxy = null;
-    }
-
-    _syncPowerState() {
-        if (!this._upowerProxy || !this._deviceProxy)
-            return;
-
-        const before = this._tracker.snapshot();
-        const hasBattery = Boolean(this._deviceProxy.IsPresent) &&
-            Number(this._deviceProxy.Type) === BATTERY_DEVICE_TYPE;
-        const onBattery = Boolean(this._upowerProxy.OnBattery);
-
-        this._tracker.setPowerState({
-            available: true,
-            hasBattery,
-            onBattery,
-        }, this._nowUs());
-
-        const after = this._tracker.snapshot();
-
-        if (after.sessionActive && after.onBattery && this._resumedChargePercent !== null) {
-            const currentCharge = Number(this._deviceProxy.Percentage);
-            if (!isNaN(currentCharge) && currentCharge >= 0 && currentCharge <= 100) {
-                const diff = currentCharge - this._resumedChargePercent;
-                if (diff > CHARGE_CHANGE_THRESHOLD_PERCENT) {
-                    this._tracker.finish();
-                    this._clearSessionFile();
-                    this._tracker.setPowerState({
-                        available: true,
-                        hasBattery,
-                        onBattery,
-                    }, this._nowUs());
-                    this._resumedChargePercent = null;
-                    this._refreshUi();
-                    this._saveRecordIfDirty();
-                    this._saveSessionState(this._tracker.snapshot());
-                    return;
-                }
-            }
+        if (this._uiManager) {
+            this._uiManager.destroyIndicator();
+            this._uiManager = null;
         }
-
-        if (before.sessionActive && !after.sessionActive)
-            this._saveRecordIfDirty();
-
-        this._saveSessionState(after);
-        this._refreshUi();
+        this._tracker = null;
+        this._fileManager = null;
     }
 
-    _setPowerUnavailable() {
-        this._tracker.setPowerState({
-            available: false,
-            hasBattery: false,
-            onBattery: false,
-        }, this._nowUs());
-        this._saveRecordIfDirty();
-        this._saveSessionState(this._tracker.snapshot());
-        this._refreshUi();
-    }
+    async _loadAndStart() {
+        const [recordData, sessionData, settingsData] = await Promise.all([
+            this._fileManager.loadRecord(),
+            this._fileManager.loadSession(),
+            this._fileManager.loadSettings()
+        ]);
 
-    _watchLogind() {
-        this._logindWatchId = Gio.bus_watch_name(
-            Gio.BusType.SYSTEM,
-            LOGIND_NAME,
-            Gio.BusNameWatcherFlags.NONE,
-            () => this._connectLogind(),
-            () => this._onLogindVanished()
+        this._position = settingsData.position;
+        const resumedChargePercent = sessionData.active ? sessionData.chargePercent : null;
+
+        this._tracker = new BatterySessionTracker(
+            recordData.value,
+            sessionData.active ? sessionData.elapsedSeconds : 0
         );
-    }
+        this._lastSavedRecord = recordData.valid ? recordData.value : null;
+        this._lastSavedSession = null;
 
-    _connectLogind() {
-        const generation = ++this._logindGeneration;
-        this._clearLogindProxy();
+        this._uiManager.updateTracker(this._tracker);
+        this._uiManager.updatePosition(this._position);
+        this._uiManager.rebuild(this._position, this.uuid);
 
-        new LogindProxy(
-            Gio.DBus.system,
-            LOGIND_NAME,
-            LOGIND_PATH,
-            (proxy, error) => {
-                if (generation !== this._logindGeneration)
-                    return;
-
-                if (error) {
-                    return;
-                }
-
-                this._logindProxy = proxy;
-                this._logindSignalId = proxy.connectSignal(
-                    'PrepareForSleep',
-                    (_proxy, _sender, [sleeping]) => {
-                        this._onPrepareForSleep(sleeping);
-                    }
-                );
-            }
+        this._powerManager = new PowerManager(
+            this._tracker,
+            (state) => this._saveState(state),
+            (state) => this._uiManager.refresh(state),
+            () => this._onChargeChange(),
+            (proxy) => this._uiManager.setDeviceProxy(proxy)
         );
+        this._powerManager.setResumedCharge(resumedChargePercent);
+        this._powerManager.start();
+
+        this._startTimer();
+        this._uiManager.refresh(this._tracker.snapshot());
     }
 
-    _onLogindVanished() {
-        this._logindGeneration++;
-        this._clearLogindProxy();
-        this._tracker.setSleeping(false, this._nowUs());
-        this._refreshUi();
-    }
-
-    _clearLogindProxy() {
-        if (this._logindProxy && this._logindSignalId) {
-            this._logindProxy.disconnectSignal(this._logindSignalId);
+    _onChargeChange() {
+        if (this._powerManager) {
+            this._powerManager.setResumedCharge(null);
         }
-        this._logindSignalId = 0;
-        this._logindProxy = null;
+        this._fileManager.deleteSession();
     }
 
-    _onPrepareForSleep(sleeping) {
-        this._tracker.setSleeping(Boolean(sleeping), this._nowUs());
-
-        if (sleeping) {
-            this._saveRecordIfDirty();
-            this._saveSessionState(this._tracker.snapshot());
-        } else {
-            this._syncPowerState();
-        }
-
-        this._refreshUi();
-    }
-
-    _syncIndicatorForSessionMode() {
-        const showIndicator = Main.sessionMode.currentMode === 'user' ||
-            Main.sessionMode.parentMode === 'user';
-
-        if (showIndicator && !this._indicator)
-            this._createIndicator();
-        else if (!showIndicator && this._indicator)
-            this._destroyIndicator();
-    }
-
-    _createIndicator() {
-        this._indicator = new PanelMenu.Button(
-            0.5,
-            'Battery Session Timer',
-            false
-        );
-        this._indicator.menu.box.add_style_class_name(
-            'battery-session-timer-menu'
-        );
-
-        const box = new St.BoxLayout({
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._icon = new St.Icon({
-            icon_name: 'battery-good-symbolic',
-            style_class: 'system-status-icon',
-        });
-        this._label = new St.Label({
-            text: '',
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        box.add_child(this._icon);
-        box.add_child(this._label);
-        this._indicator.add_child(box);
-
-        this._sessionItem = new PopupMenu.PopupMenuItem('', {
-            reactive: false,
-        });
-        this._recordItem = new PopupMenu.PopupMenuItem('', {
-            reactive: false,
-        });
-        this._indicator.menu.addMenuItem(this._sessionItem);
-        this._indicator.menu.addMenuItem(this._recordItem);
-        this._indicator.menu.addMenuItem(
-            new PopupMenu.PopupSeparatorMenuItem()
-        );
-
-        this._indicator.menu.addAction(
-            'Слева (после Обзора)',
-            () => this._setPosition('left-after-activities')
-        );
-        this._indicator.menu.addAction(
-            'По центру (перед часами)',
-            () => this._setPosition('before-clock')
-        );
-        this._indicator.menu.addAction(
-            'По центру (после часов)',
-            () => this._setPosition('after-clock')
-        );
-        this._indicator.menu.addAction(
-            'Справа (перед индикаторами)',
-            () => this._setPosition('before-tray')
-        );
-        this._indicator.menu.addMenuItem(
-            new PopupMenu.PopupSeparatorMenuItem()
-        );
-        this._indicator.menu.addAction(
-            'Сбросить рекорд',
-            () => this._resetRecord()
-        );
-
-        const placement = PANEL_PLACEMENT[this._position] ??
-            PANEL_PLACEMENT[DEFAULT_POSITION];
-        Main.panel.addToStatusArea(
-            this.uuid,
-            this._indicator,
-            placement.position,
-            placement.box
-        );
-
-        this._refreshUi();
-    }
-
-    _destroyIndicator() {
-        if (this._indicator) {
-            this._indicator.destroy();
-            this._indicator = null;
-        }
-        if (this._icon) {
-            this._icon.destroy();
-            this._icon = null;
-        }
-        if (this._label) {
-            this._label.destroy();
-            this._label = null;
-        }
-        if (this._sessionItem) {
-            this._sessionItem.destroy();
-            this._sessionItem = null;
-        }
-        if (this._recordItem) {
-            this._recordItem.destroy();
-            this._recordItem = null;
-        }
-    }
-
-    _setPosition(position) {
-        if (!PANEL_POSITIONS.includes(position) || this._position === position)
-            return;
-
-        this._position = position;
-        this._savePosition();
-
-        if (this._rebuildId) {
-            GLib.Source.remove(this._rebuildId);
-            this._rebuildId = 0;
-        }
-
-        this._rebuildId = GLib.idle_add(
-            GLib.PRIORITY_DEFAULT_IDLE,
-            () => {
-                this._rebuildId = 0;
-                if (this._indicator) {
-                    this._destroyIndicator();
-                    this._syncIndicatorForSessionMode();
-                }
-                return GLib.SOURCE_REMOVE;
-            }
-        );
-    }
-
-    _resetRecord() {
-        this._tracker.resetRecord();
-        this._saveRecordIfDirty();
-        this._refreshUi();
-    }
-
-    _onTimer() {
-        const nowUs = this._nowUs();
-        this._tracker.tick(nowUs);
-
-        if (nowUs - this._lastCheckpointUs >= CHECKPOINT_INTERVAL_US) {
-            this._lastCheckpointUs = nowUs;
-            this._saveRecordIfDirty();
-            this._saveSessionState(this._tracker.snapshot());
-        }
-
-        this._refreshUi();
-    }
-
-    _refreshUi() {
-        if (!this._indicator)
-            return;
-
-        const state = this._tracker.snapshot();
-        this._icon.icon_name = this._getBatteryIcon(state);
-
-        if (!state.available) {
-            this._label.text = ' Нет данных';
-            this._sessionItem.label.text = 'UPower недоступен';
-        } else if (!state.hasBattery) {
-            this._label.text = ' Нет батареи';
-            this._sessionItem.label.text = 'Батарея не обнаружена';
-        } else if (!state.onBattery) {
-            this._label.text = '';
-            this._sessionItem.label.text = 'Текущая сессия: питание подключено';
-        } else {
-            const duration = formatDuration(state.elapsedSeconds);
-            this._label.text = ` ${duration}`;
-            this._sessionItem.label.text = `Текущая сессия: ${duration}`;
-        }
-
-        this._recordItem.label.text = `Рекорд: ${formatDuration(state.record)}`;
-    }
-
-    _getBatteryIcon(state) {
-        const deviceState = Number(this._deviceProxy?.State);
-        return getBatteryIconName({
-            available: state.available,
-            hasBattery: state.hasBattery,
-            percentage: this._deviceProxy?.Percentage,
-            charging: deviceState === UPOWER_STATE_CHARGING,
-            fullyCharged: deviceState === UPOWER_STATE_FULLY_CHARGED,
-            fallbackIconName: this._deviceProxy?.IconName,
-        });
-    }
-
-    _loadRecord() {
-        try {
-            const file = Gio.File.new_for_path(this._recordFile);
-            if (!file.query_exists(null))
-                return {value: 0, valid: true};
-
-            const [, data] = file.load_contents(null);
-            const decoded = decodeRecord(new TextDecoder().decode(data));
-            if (!decoded.valid) {
-                console.error('Battery Session Timer: file error');
-            }
-            return decoded;
-        } catch (_) {
-            return {value: 0, valid: false};
-        }
-    }
-
-    _saveRecordIfDirty() {
-        const record = this._tracker.snapshot().record;
-        if (record === this._lastSavedRecord)
-            return;
-
-        if (this._replaceFile(this._recordFile, String(record), 'рекорд'))
-            this._lastSavedRecord = record;
-    }
-
-    _loadSession() {
-        try {
-            const file = Gio.File.new_for_path(this._sessionFile);
-            if (!file.query_exists(null))
-                return {active: false, elapsedSeconds: 0, chargePercent: null};
-
-            const [, data] = file.load_contents(null);
-            const parsed = JSON.parse(new TextDecoder().decode(data));
-            const active = typeof parsed.active === 'boolean' ? parsed.active : false;
-            const elapsedSeconds = Number.isSafeInteger(parsed.elapsedSeconds) && parsed.elapsedSeconds >= 0
-                ? parsed.elapsedSeconds
-                : 0;
-            const chargePercent = typeof parsed.chargePercent === 'number' && parsed.chargePercent >= 0 && parsed.chargePercent <= 100
-                ? parsed.chargePercent
-                : null;
-            return {active, elapsedSeconds, chargePercent};
-        } catch (_) {
-            console.error('Battery Session Timer: file error');
-            return {active: false, elapsedSeconds: 0, chargePercent: null};
-        }
-    }
-
-    _saveSessionState(state) {
+    async _saveState(state) {
         const active = state.sessionActive;
         let chargePercent = null;
-        if (active && this._deviceProxy) {
+        if (active && this._powerManager && this._powerManager._deviceProxy) {
             try {
-                const pct = Number(this._deviceProxy.Percentage);
+                const pct = Number(this._powerManager._deviceProxy.Percentage);
                 if (!isNaN(pct) && pct >= 0 && pct <= 100) {
                     chargePercent = pct;
                 }
-            } catch (_) {}
+            } catch (e) {}
         }
-        const payload = JSON.stringify({
+        await this._fileManager.saveSession(
             active,
-            elapsedSeconds: active ? state.elapsedSeconds : 0,
-            chargePercent,
-        });
-
-        if (payload === this._lastSavedSession)
-            return;
-
-        if (this._replaceFile(this._sessionFile, payload, 'состояние сессии'))
-            this._lastSavedSession = payload;
-    }
-
-    _clearSessionFile() {
-        try {
-            const file = Gio.File.new_for_path(this._sessionFile);
-            if (file.query_exists(null)) {
-                file.delete(null);
-                this._lastSavedSession = null;
-                this._resumedChargePercent = null;
-            }
-        } catch (_) {}
-    }
-
-    _loadPosition() {
-        try {
-            const file = Gio.File.new_for_path(this._settingsFile);
-            if (!file.query_exists(null))
-                return DEFAULT_POSITION;
-
-            const [, data] = file.load_contents(null);
-            const decoded = decodePosition(new TextDecoder().decode(data));
-            if (!decoded.valid) {
-                console.error('Battery Session Timer: file error');
-            }
-            return decoded.value;
-        } catch (_) {
-            return DEFAULT_POSITION;
-        }
-    }
-
-    _savePosition() {
-        this._replaceFile(
-            this._settingsFile,
-            JSON.stringify({position: this._position}),
-            'настройки'
+            active ? state.elapsedSeconds : 0,
+            chargePercent
         );
     }
 
-    _replaceFile(path, contents, description) {
-        try {
-            Gio.File.new_for_path(path).replace_contents(
-                contents,
-                null,
-                false,
-                Gio.FileCreateFlags.REPLACE_DESTINATION,
-                null
-            );
-            return true;
-        } catch (_) {
-            return false;
+    _startTimer() {
+        this._timeoutId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            1,
+            () => {
+                if (this._tracker) {
+                    this._tracker.tick(GLib.get_monotonic_time());
+                    this._uiManager.refresh(this._tracker.snapshot());
+                }
+                return GLib.SOURCE_CONTINUE;
+            }
+        );
+    }
+
+    _setPosition(position) {
+        this._position = position;
+        this._fileManager.saveSettings(position);
+        if (this._uiManager) {
+            this._uiManager.updatePosition(position);
+            this._uiManager.rebuild(position, this.uuid);
         }
     }
 
-    _nowUs() {
-        return GLib.get_monotonic_time();
-    }
-
-    disable() {
-        this._proxyGeneration++;
-        this._logindGeneration++;
-
-        if (this._tracker) {
-            this._tracker.tick(this._nowUs());
-            const state = this._tracker.snapshot();
-            this._saveRecordIfDirty();
-            this._saveSessionState(state);
-        }
-
-        if (this._timeoutId) {
-            GLib.Source.remove(this._timeoutId);
-            this._timeoutId = 0;
-        }
-        if (this._rebuildId) {
-            GLib.Source.remove(this._rebuildId);
-            this._rebuildId = 0;
-        }
-
-        if (this._sessionModeSignalId) {
-            Main.sessionMode.disconnect(this._sessionModeSignalId);
-            this._sessionModeSignalId = 0;
-        }
-
-        if (this._upowerWatchId) {
-            Gio.bus_unwatch_name(this._upowerWatchId);
-            this._upowerWatchId = 0;
-        }
-        if (this._logindWatchId) {
-            Gio.bus_unwatch_name(this._logindWatchId);
-            this._logindWatchId = 0;
-        }
-
-        this._clearUPowerProxies();
-        this._clearLogindProxy();
-        this._destroyIndicator();
-
-        this._tracker = null;
+    _resetRecord() {
+        if (!this._tracker) return;
+        this._tracker.resetRecord();
+        this._fileManager.saveRecord(this._tracker.snapshot().record);
+        this._uiManager.refresh(this._tracker.snapshot());
     }
 }
