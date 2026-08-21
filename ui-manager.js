@@ -149,7 +149,7 @@ export class UIManager {
         }
     }
 
-    createIndicator(uuid) {
+    _createIndicatorNow(uuid) {
         this._indicator = new PanelMenu.Button(0.5, 'Battery Session Timer', false);
         this._indicator.menu.box.add_style_class_name('battery-session-timer-menu');
 
@@ -185,6 +185,19 @@ export class UIManager {
         Main.panel.addToStatusArea(uuid, this._indicator, placement.position, placement.box);
 
         this.showLoading();
+    }
+
+    createIndicator(uuid) {
+        if (this._position === 'before-tray') {
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                if (!this._indicator) {
+                    this._createIndicatorNow(uuid);
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+        } else {
+            this._createIndicatorNow(uuid);
+        }
     }
 
     _getPositionLabel(pos) {

@@ -9,6 +9,20 @@ export class FileManager {
         this._sessionFile = sessionFile;
     }
 
+    _ensureDirectory(filePath) {
+        const file = Gio.File.new_for_path(filePath);
+        const parent = file.get_parent();
+        if (parent && !parent.query_exists(null)) {
+            try {
+                parent.make_directory_with_parents(null);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     _loadFileAsync(filePath) {
         return new Promise((resolve) => {
             const file = Gio.File.new_for_path(filePath);
@@ -29,18 +43,14 @@ export class FileManager {
 
     _saveFileAsync(filePath, contents) {
         return new Promise((resolve) => {
-            const file = Gio.File.new_for_path(filePath);
-            const parent = file.get_parent();
-            if (parent && !parent.query_exists(null)) {
-                try {
-                    parent.make_directory_with_parents(null);
-                } catch (e) {
-                    resolve(false);
-                    return;
-                }
+            if (!this._ensureDirectory(filePath)) {
+                resolve(false);
+                return;
             }
+            const file = Gio.File.new_for_path(filePath);
+            const bytes = new TextEncoder().encode(contents);
             file.replace_contents_async(
-                contents,
+                bytes,
                 null,
                 false,
                 Gio.FileCreateFlags.REPLACE_DESTINATION,
@@ -57,6 +67,30 @@ export class FileManager {
         });
     }
 
+    saveSettingsSync(position) {
+        try {
+            if (!PANEL_POSITIONS.includes(position)) {
+                position = 'before-tray';
+            }
+            const payload = JSON.stringify({ position });
+            if (!this._ensureDirectory(this._settingsFile)) {
+                return false;
+            }
+            const file = Gio.File.new_for_path(this._settingsFile);
+            const bytes = new TextEncoder().encode(payload);
+            file.replace_contents(
+                bytes,
+                null,
+                false,
+                Gio.FileCreateFlags.REPLACE_DESTINATION,
+                null
+            );
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
     saveSessionSync(active, elapsedSeconds, chargePercent) {
         try {
             const safeElapsed = Number.isSafeInteger(elapsedSeconds) && elapsedSeconds >= 0
@@ -69,17 +103,13 @@ export class FileManager {
                     ? Number(chargePercent)
                     : null
             });
-            const file = Gio.File.new_for_path(this._sessionFile);
-            const parent = file.get_parent();
-            if (parent && !parent.query_exists(null)) {
-                try {
-                    parent.make_directory_with_parents(null);
-                } catch (e) {
-                    return false;
-                }
+            if (!this._ensureDirectory(this._sessionFile)) {
+                return false;
             }
+            const file = Gio.File.new_for_path(this._sessionFile);
+            const bytes = new TextEncoder().encode(payload);
             file.replace_contents(
-                payload,
+                bytes,
                 null,
                 false,
                 Gio.FileCreateFlags.REPLACE_DESTINATION,

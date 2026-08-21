@@ -9,7 +9,7 @@ const LOGIND_PATH = '/org/freedesktop/login1';
 const BATTERY_DEVICE_TYPE = 2;
 const UPOWER_STATE_CHARGING = 1;
 const UPOWER_STATE_FULLY_CHARGED = 4;
-const CHARGE_CHANGE_THRESHOLD_PERCENT = 10;
+const CHARGE_CHANGE_THRESHOLD_PERCENT = 3;
 
 const UPowerProxy = Gio.DBusProxy.makeProxyWrapper(`
 <node>
@@ -214,6 +214,8 @@ export class PowerManager {
                     const diff = currentCharge - this._resumedChargePercent;
                     if (diff > CHARGE_CHANGE_THRESHOLD_PERCENT) {
                         this._onChargeChange();
+                        this._tracker.finish(GLib.get_monotonic_time());
+                        this._resumedChargePercent = null;
                         this._onUiRefresh(this._tracker.snapshot());
                         return;
                     }

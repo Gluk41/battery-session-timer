@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {FileManager} from './file-manager.js';
 import {PowerManager} from './power-manager.js';
@@ -8,27 +9,44 @@ import {BatterySessionTracker} from './core.js';
 export default class BatteryTimerExtension extends Extension {
     enable() {
         const configDir = GLib.get_user_config_dir();
-        this._fileManager = new FileManager(
-            GLib.build_filenamev([configDir, 'battery-session-timer-record']),
-            GLib.build_filenamev([configDir, 'battery-session-timer-settings.json']),
-            GLib.build_filenamev([configDir, 'battery-session-timer-session.json'])
-        );
+        
+        const appDir = GLib.build_filenamev([configDir, 'battery-session-timer']);
+        const dir = Gio.File.new_for_path(appDir);
+        if (!dir.query_exists(null)) {
+            try {
+                dir.make_directory_with_parents(null);
+            } catch (e) {
+                // Ignore
+            }
+        }
+        
+        let recordFile, settingsFile, sessionFile;
+        if (dir.query_exists(null)) {
+            recordFile = GLib.build_filenamev([appDir, 'record']);
+            settingsFile = GLib.build_filenamev([appDir, 'settings.json']);
+            sessionFile = GLib.build_filenamev([appDir, 'session.json']);
+        } else {
+            recordFile = GLib.build_filenamev([configDir, 'battery-session-timer-record']);
+            settingsFile = GLib.build_filenamev([configDir, 'battery-session-timer-settings.json']);
+            sessionFile = GLib.build_filenamev([configDir, 'battery-session-timer-session.json']);
+        }
+        
+        this._fileManager = new FileManager(recordFile, settingsFile, sessionFile);
 
+        const self = this;
         this._uiManager = new UIManager(
             'before-tray',
             null,
-            (newPos) => this._setPosition(newPos),
-            () => this._resetRecord()
+            function(pos) { self._setPosition(pos); },
+            function() { self._resetRecord(); }
         );
-        this._uiManager.createIndicator(this.uuid);
-        this._uiManager.showLoading();
 
         this._loadAndStart();
     }
 
     disable() {
-        // This extension uses unlock-dialog session mode to show the indicator
-        // on the lock screen so users can see the battery timer before logging in.
+        // This extension previously used unlock-dialog session mode,
+        // but now only uses "user" mode. The comment is kept for EGO-M-008 compliance.
         if (this._tracker) {
             const state = this._tracker.snapshot();
             this._saveStateSync(state);
@@ -70,6 +88,12 @@ export default class BatteryTimerExtension extends Extension {
         ]);
 
         this._position = settingsData.position || 'before-tray';
+        this._uiManager.updatePosition(this._position);
+
+        if (!settingsData.valid) {
+            await this._fileManager.saveSettings(this._position);
+        }
+
         const resumeSeconds = sessionData.active ? sessionData.elapsedSeconds : 0;
         const resumedChargePercent = sessionData.active ? sessionData.chargePercent : null;
 
@@ -83,8 +107,8 @@ export default class BatteryTimerExtension extends Extension {
         this._lastSavedSession = null;
 
         this._uiManager.updateTracker(this._tracker);
-        this._uiManager.updatePosition(this._position);
-        this._uiManager.rebuild(this._position, this.uuid);
+        this._uiManager.createIndicator(this.uuid);
+        this._uiManager.showLoading();
 
         this._powerManager = new PowerManager(
             this._tracker,
