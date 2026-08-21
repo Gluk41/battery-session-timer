@@ -138,6 +138,9 @@ export class UIManager {
         } else if (!state.onBattery) {
             this._label.text = '';
             this._sessionItem.label.text = 'Текущая сессия: питание подключено';
+        } else if (!state.sessionActive) {
+            this._label.text = '';
+            this._sessionItem.label.text = 'Текущая сессия: неактивна';
         } else {
             const duration = formatDuration(state.elapsedSeconds);
             this._label.text = ` ${duration}`;
@@ -156,7 +159,9 @@ export class UIManager {
         this._rebuildId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._rebuildId = 0;
             if (this._indicator) {
-                this.destroyIndicator();
+                const oldIndicator = this._indicator;
+                this._indicator = null;
+                oldIndicator.destroy();
                 this.createIndicator(uuid);
                 if (this._tracker) {
                     this.refresh(this._tracker.snapshot());

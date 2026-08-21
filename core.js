@@ -97,7 +97,7 @@ export function getBatteryIconName({
 }
 
 export class BatterySessionTracker {
-    constructor(record = 0, resumeElapsedSeconds = 0) {
+    constructor(record = 0, resumeElapsedSeconds = 0, resumeActive = false) {
         this._record = decodeRecord(record).value;
         this._available = false;
         this._hasBattery = false;
@@ -112,14 +112,31 @@ export class BatterySessionTracker {
             resumeElapsedSeconds > 0
             ? resumeElapsedSeconds * MICROSECONDS_PER_SECOND
             : 0;
+
+        if (this._pendingResumeUs > 0 && resumeActive) {
+            this._sessionActive = true;
+            this._elapsedUs = this._pendingResumeUs;
+            this._pendingResumeUs = 0;
+
+            const elapsedSeconds = Math.floor(this._elapsedUs / MICROSECONDS_PER_SECOND);
+            if (elapsedSeconds > this._record) {
+                this._record = elapsedSeconds;
+            }
+        }
     }
 
     setPowerState({available, hasBattery, onBattery}, nowUs) {
         const now = this._normaliseNow(nowUs);
+
+        if (this._sessionActive && this._segmentStartUs === null && !this._sleeping) {
+            this._segmentStartUs = now;
+        }
+
         this._accrue(now);
 
         this._available = Boolean(available);
         this._hasBattery = this._available && Boolean(hasBattery);
+        const wasOnBattery = this._onBattery;
         this._onBattery = this._hasBattery && Boolean(onBattery);
 
         if (!this._available) {
@@ -128,16 +145,31 @@ export class BatterySessionTracker {
             return this.snapshot();
         }
 
-        if (!this._hasBattery || !this._onBattery) {
+        if (!this._hasBattery) {
             this._endSession();
             this._pendingResumeUs = 0;
             return this.snapshot();
         }
 
-        if (!this._sessionActive)
+        if (!wasOnBattery && this._onBattery) {
+            if (!this._sessionActive) {
+                this._sessionActive = true;
+                this._recordEligible = true;
+                this._segmentStartUs = this._sleeping ? null : now;
+            }
+            return this.snapshot();
+        }
+
+        if (wasOnBattery && !this._onBattery) {
+            this._segmentStartUs = null;
+            return this.snapshot();
+        }
+
+        if (this._onBattery && !this._sessionActive) {
             this._startSession(now);
-        else if (!this._sleeping && this._segmentStartUs === null)
+        } else if (!this._sleeping && this._segmentStartUs === null && this._sessionActive && this._onBattery) {
             this._segmentStartUs = now;
+        }
 
         return this.snapshot();
     }
@@ -205,8 +237,10 @@ export class BatterySessionTracker {
     _startSession(nowUs) {
         this._sessionActive = true;
         this._recordEligible = true;
-        this._elapsedUs = this._pendingResumeUs;
-        this._pendingResumeUs = 0;
+        if (this._pendingResumeUs > 0) {
+            this._elapsedUs = this._pendingResumeUs;
+            this._pendingResumeUs = 0;
+        }
         this._segmentStartUs = this._sleeping ? null : nowUs;
 
         if (this._elapsedUs > 0) {
@@ -223,6 +257,7 @@ export class BatterySessionTracker {
         this._recordEligible = true;
         this._elapsedUs = 0;
         this._segmentStartUs = null;
+        this._pendingResumeUs = 0;
     }
 
     _accrue(nowUs) {

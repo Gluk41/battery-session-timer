@@ -29,6 +29,10 @@ export default class BatteryTimerExtension extends Extension {
     disable() {
         // This extension uses unlock-dialog session mode to show the indicator
         // on the lock screen so users can see the battery timer before logging in.
+        if (this._tracker) {
+            const state = this._tracker.snapshot();
+            this._saveStateSync(state);
+        }
         if (this._timeoutId) {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = 0;
@@ -45,6 +49,19 @@ export default class BatteryTimerExtension extends Extension {
         this._fileManager = null;
     }
 
+    _saveStateSync(state) {
+        const active = state.sessionActive;
+        let chargePercent = null;
+        if (active && this._powerManager) {
+            chargePercent = this._powerManager.getCurrentCharge();
+        }
+        this._fileManager.saveSessionSync(
+            active,
+            active ? state.elapsedSeconds : 0,
+            chargePercent
+        );
+    }
+
     async _loadAndStart() {
         const [recordData, sessionData, settingsData] = await Promise.all([
             this._fileManager.loadRecord(),
@@ -53,12 +70,15 @@ export default class BatteryTimerExtension extends Extension {
         ]);
 
         this._position = settingsData.position;
+        const resumeSeconds = sessionData.active ? sessionData.elapsedSeconds : 0;
         const resumedChargePercent = sessionData.active ? sessionData.chargePercent : null;
 
         this._tracker = new BatterySessionTracker(
             recordData.value,
-            sessionData.active ? sessionData.elapsedSeconds : 0
+            resumeSeconds,
+            sessionData.active
         );
+
         this._lastSavedRecord = recordData.valid ? recordData.value : null;
         this._lastSavedSession = null;
 
@@ -77,7 +97,10 @@ export default class BatteryTimerExtension extends Extension {
         this._powerManager.start();
 
         this._startTimer();
-        this._uiManager.refresh(this._tracker.snapshot());
+
+        const state = this._tracker.snapshot();
+        this._uiManager.refresh(state);
+        await this._saveState(state);
     }
 
     _onChargeChange() {
@@ -85,18 +108,18 @@ export default class BatteryTimerExtension extends Extension {
             this._powerManager.setResumedCharge(null);
         }
         this._fileManager.deleteSession();
+        if (this._tracker) {
+            this._tracker.finish(GLib.get_monotonic_time());
+            this._uiManager.refresh(this._tracker.snapshot());
+            this._saveStateSync(this._tracker.snapshot());
+        }
     }
 
     async _saveState(state) {
         const active = state.sessionActive;
         let chargePercent = null;
-        if (active && this._powerManager && this._powerManager._deviceProxy) {
-            try {
-                const pct = Number(this._powerManager._deviceProxy.Percentage);
-                if (!isNaN(pct) && pct >= 0 && pct <= 100) {
-                    chargePercent = pct;
-                }
-            } catch (e) {}
+        if (active && this._powerManager) {
+            chargePercent = this._powerManager.getCurrentCharge();
         }
         await this._fileManager.saveSession(
             active,
@@ -106,13 +129,20 @@ export default class BatteryTimerExtension extends Extension {
     }
 
     _startTimer() {
+        if (this._timeoutId) {
+            GLib.Source.remove(this._timeoutId);
+        }
         this._timeoutId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
             1,
             () => {
                 if (this._tracker) {
                     this._tracker.tick(GLib.get_monotonic_time());
-                    this._uiManager.refresh(this._tracker.snapshot());
+                    const state = this._tracker.snapshot();
+                    this._uiManager.refresh(state);
+                    if (state.sessionActive) {
+                        this._saveStateSync(state);
+                    }
                 }
                 return GLib.SOURCE_CONTINUE;
             }

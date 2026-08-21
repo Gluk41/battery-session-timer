@@ -4,6 +4,6 @@
   "uuid": "battery-session-timer@local",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
   "session-modes": ["user", "unlock-dialog"],
-  "version": 12,
+  "version": 13,
   "url": "https://github.com/Gluk41/battery-session-timer"
 }

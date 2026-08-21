@@ -29,6 +29,15 @@ export class FileManager {
     _saveFileAsync(filePath, contents) {
         return new Promise((resolve) => {
             const file = Gio.File.new_for_path(filePath);
+            const parent = file.get_parent();
+            if (parent && !parent.query_exists(null)) {
+                try {
+                    parent.make_directory_with_parents(null);
+                } catch (e) {
+                    resolve(false);
+                    return;
+                }
+            }
             file.replace_contents_async(
                 contents,
                 null,
@@ -45,6 +54,40 @@ export class FileManager {
                 }
             );
         });
+    }
+
+    saveSessionSync(active, elapsedSeconds, chargePercent) {
+        try {
+            const safeElapsed = Number.isSafeInteger(elapsedSeconds) && elapsedSeconds >= 0
+                ? elapsedSeconds
+                : 0;
+            const payload = JSON.stringify({
+                active: Boolean(active),
+                elapsedSeconds: safeElapsed,
+                chargePercent: chargePercent !== null && chargePercent !== undefined
+                    ? Number(chargePercent)
+                    : null
+            });
+            const file = Gio.File.new_for_path(this._sessionFile);
+            const parent = file.get_parent();
+            if (parent && !parent.query_exists(null)) {
+                try {
+                    parent.make_directory_with_parents(null);
+                } catch (e) {
+                    return false;
+                }
+            }
+            file.replace_contents(
+                payload,
+                null,
+                false,
+                Gio.FileCreateFlags.REPLACE_DESTINATION,
+                null
+            );
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 
     async loadRecord() {

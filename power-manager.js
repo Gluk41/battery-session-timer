@@ -9,29 +9,37 @@ const LOGIND_PATH = '/org/freedesktop/login1';
 const BATTERY_DEVICE_TYPE = 2;
 const UPOWER_STATE_CHARGING = 1;
 const UPOWER_STATE_FULLY_CHARGED = 4;
-const CHARGE_CHANGE_THRESHOLD_PERCENT = 5;
+const CHARGE_CHANGE_THRESHOLD_PERCENT = 10;
 
-const UPOWER_XML = `<node><interface name="org.freedesktop.UPower">
-    <property name="OnBattery" type="b" access="read"/>
-</interface></node>`;
+const UPowerProxy = Gio.DBusProxy.makeProxyWrapper(`
+<node>
+    <interface name="org.freedesktop.UPower">
+        <property name="OnBattery" type="b" access="read"/>
+    </interface>
+</node>
+`);
 
-const UPOWER_DEVICE_XML = `<node><interface name="org.freedesktop.UPower.Device">
-    <property name="Percentage" type="d" access="read"/>
-    <property name="IsPresent" type="b" access="read"/>
-    <property name="Type" type="u" access="read"/>
-    <property name="State" type="u" access="read"/>
-    <property name="IconName" type="s" access="read"/>
-</interface></node>`;
+const UPowerDeviceProxy = Gio.DBusProxy.makeProxyWrapper(`
+<node>
+    <interface name="org.freedesktop.UPower.Device">
+        <property name="Percentage" type="d" access="read"/>
+        <property name="IsPresent" type="b" access="read"/>
+        <property name="Type" type="u" access="read"/>
+        <property name="State" type="u" access="read"/>
+        <property name="IconName" type="s" access="read"/>
+    </interface>
+</node>
+`);
 
-const LOGIND_XML = `<node><interface name="org.freedesktop.login1.Manager">
-    <signal name="PrepareForSleep">
-        <arg name="start" type="b"/>
-    </signal>
-</interface></node>`;
-
-const UPowerProxy = Gio.DBusProxy.makeProxyWrapper(UPOWER_XML);
-const UPowerDeviceProxy = Gio.DBusProxy.makeProxyWrapper(UPOWER_DEVICE_XML);
-const LogindProxy = Gio.DBusProxy.makeProxyWrapper(LOGIND_XML);
+const LogindProxy = Gio.DBusProxy.makeProxyWrapper(`
+<node>
+    <interface name="org.freedesktop.login1.Manager">
+        <signal name="PrepareForSleep">
+            <arg name="start" type="b"/>
+        </signal>
+    </interface>
+</node>
+`);
 
 export class PowerManager {
     constructor(tracker, onStateChange, onUiRefresh, onChargeChange, onDeviceProxy = null) {
@@ -50,14 +58,26 @@ export class PowerManager {
         this._deviceProxy = null;
         this._logindProxy = null;
         this._resumedChargePercent = null;
+        this._reconnectTimer = 0;
+        this._pollTimer = 0;
+        this._syncInProgress = false;
     }
 
     start() {
         this._watchUPower();
         this._watchLogind();
+        this._startPolling();
     }
 
     stop() {
+        if (this._reconnectTimer) {
+            GLib.Source.remove(this._reconnectTimer);
+            this._reconnectTimer = 0;
+        }
+        if (this._pollTimer) {
+            GLib.Source.remove(this._pollTimer);
+            this._pollTimer = 0;
+        }
         this._clearUPowerProxies();
         this._clearLogindProxy();
         if (this._upowerWatchId) {
@@ -72,6 +92,33 @@ export class PowerManager {
 
     setResumedCharge(charge) {
         this._resumedChargePercent = charge;
+    }
+
+    getCurrentCharge() {
+        if (!this._deviceProxy) return null;
+        try {
+            const pct = Number(this._deviceProxy.Percentage);
+            if (!isNaN(pct) && pct >= 0 && pct <= 100) {
+                return pct;
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    _startPolling() {
+        if (this._pollTimer) {
+            GLib.Source.remove(this._pollTimer);
+        }
+        this._pollTimer = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            1,
+            () => {
+                if (this._upowerProxy && this._deviceProxy) {
+                    this._syncPowerState();
+                }
+                return GLib.SOURCE_CONTINUE;
+            }
+        );
     }
 
     _watchUPower() {
@@ -91,28 +138,44 @@ export class PowerManager {
         new UPowerProxy(Gio.DBus.system, UPOWER_NAME, UPOWER_PATH, (proxy, error) => {
             if (generation !== this._proxyGeneration) return;
             if (error) {
-                console.error('UPower error');
+                this._scheduleReconnect();
                 return;
             }
             this._upowerProxy = proxy;
-            this._upowerSignalIds.push([proxy, proxy.connect('g-properties-changed', () => this._syncPowerState())]);
+            this._upowerSignalIds.push([proxy, proxy.connect('g-properties-changed', () => {
+                this._syncPowerState();
+            })]);
             this._syncPowerState();
         });
 
         new UPowerDeviceProxy(Gio.DBus.system, UPOWER_NAME, DISPLAY_DEVICE_PATH, (proxy, error) => {
             if (generation !== this._proxyGeneration) return;
             if (error) {
-                console.error('DisplayDevice error');
+                this._scheduleReconnect();
                 return;
             }
             this._deviceProxy = proxy;
             if (this._onDeviceProxy) {
                 this._onDeviceProxy(proxy);
             }
-            this._upowerSignalIds.push([proxy, proxy.connect('g-properties-changed', () => this._syncPowerState())]);
-            // Принудительно вызываем синхронизацию сразу после получения прокси
+            this._upowerSignalIds.push([proxy, proxy.connect('g-properties-changed', () => {
+                this._syncPowerState();
+            })]);
             this._syncPowerState();
         });
+    }
+
+    _scheduleReconnect() {
+        if (this._reconnectTimer) return;
+        this._reconnectTimer = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            2,
+            () => {
+                this._reconnectTimer = 0;
+                this._connectUPower();
+                return GLib.SOURCE_REMOVE;
+            }
+        );
     }
 
     _clearUPowerProxies() {
@@ -125,39 +188,47 @@ export class PowerManager {
     }
 
     _syncPowerState() {
+        if (this._syncInProgress) return;
         if (!this._upowerProxy || !this._deviceProxy) return;
 
-        const onBattery = Boolean(this._upowerProxy.OnBattery);
-        const hasBattery = Boolean(this._deviceProxy.IsPresent) &&
-            Number(this._deviceProxy.Type) === BATTERY_DEVICE_TYPE;
-
-        this._tracker.setPowerState({
-            available: true,
-            hasBattery,
-            onBattery
-        }, GLib.get_monotonic_time());
-
-        if (onBattery && this._resumedChargePercent !== null) {
+        this._syncInProgress = true;
+        try {
+            const onBattery = Boolean(this._upowerProxy.OnBattery);
+            const hasBattery = Boolean(this._deviceProxy.IsPresent) &&
+                Number(this._deviceProxy.Type) === BATTERY_DEVICE_TYPE;
             const currentCharge = Number(this._deviceProxy.Percentage);
-            if (!isNaN(currentCharge) && currentCharge >= 0 && currentCharge <= 100) {
-                const diff = currentCharge - this._resumedChargePercent;
-                if (diff > CHARGE_CHANGE_THRESHOLD_PERCENT) {
-                    this._onChargeChange();
-                    this._tracker.finish();
-                    this._tracker.setPowerState({
-                        available: true,
-                        hasBattery,
-                        onBattery
-                    }, GLib.get_monotonic_time());
-                    this._resumedChargePercent = null;
-                    this._onUiRefresh(this._tracker.snapshot());
-                    return;
+
+            const oldState = this._tracker.snapshot();
+            this._tracker.setPowerState({
+                available: true,
+                hasBattery,
+                onBattery
+            }, GLib.get_monotonic_time());
+
+            if (this._onDeviceProxy && this._deviceProxy) {
+                this._onDeviceProxy(this._deviceProxy);
+            }
+
+            if (onBattery && this._resumedChargePercent !== null) {
+                if (!isNaN(currentCharge) && currentCharge >= 0 && currentCharge <= 100) {
+                    const diff = currentCharge - this._resumedChargePercent;
+                    if (diff > CHARGE_CHANGE_THRESHOLD_PERCENT) {
+                        this._onChargeChange();
+                        this._onUiRefresh(this._tracker.snapshot());
+                        return;
+                    }
                 }
             }
-        }
 
-        this._onStateChange(this._tracker.snapshot());
-        this._onUiRefresh(this._tracker.snapshot());
+            const newState = this._tracker.snapshot();
+            if (oldState.sessionActive !== newState.sessionActive ||
+                oldState.elapsedSeconds !== newState.elapsedSeconds) {
+                this._onStateChange(newState);
+            }
+            this._onUiRefresh(newState);
+        } finally {
+            this._syncInProgress = false;
+        }
     }
 
     _watchLogind() {
@@ -194,11 +265,14 @@ export class PowerManager {
     }
 
     _onPrepareForSleep(sleeping) {
-        this._tracker.setSleeping(Boolean(sleeping), GLib.get_monotonic_time());
         if (sleeping) {
+            this._tracker.setSleeping(true, GLib.get_monotonic_time());
             this._onStateChange(this._tracker.snapshot());
         } else {
-            this._syncPowerState();
+            this._tracker.setSleeping(false, GLib.get_monotonic_time());
+            this._proxyGeneration++;
+            this._clearUPowerProxies();
+            this._connectUPower();
         }
         this._onUiRefresh(this._tracker.snapshot());
     }
@@ -206,6 +280,7 @@ export class PowerManager {
     _onUPowerVanished() {
         this._proxyGeneration++;
         this._clearUPowerProxies();
+        this._scheduleReconnect();
     }
 
     _onLogindVanished() {
