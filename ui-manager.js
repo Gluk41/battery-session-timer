@@ -30,6 +30,95 @@ export class UIManager {
         this._isLoading = true;
     }
 
+    _getSystemLanguage() {
+        try {
+            const lang = GLib.get_language_names()[0] || 'en_US';
+            if (lang.startsWith('ru')) return 'ru';
+            return 'en';
+        } catch (e) {
+            return 'en';
+        }
+    }
+
+    _getLocalizedText(key) {
+        const lang = this._getSystemLanguage();
+        const texts = {
+            'loading': {
+                'ru': ' Загрузка...',
+                'en': ' Loading...'
+            },
+            'connecting_upower': {
+                'ru': 'Подключение к UPower...',
+                'en': 'Connecting to UPower...'
+            },
+            'record': {
+                'ru': 'Рекорд: ',
+                'en': 'Record: '
+            },
+            'upower_unavailable': {
+                'ru': 'UPower недоступен',
+                'en': 'UPower unavailable'
+            },
+            'no_battery': {
+                'ru': 'Нет батареи',
+                'en': 'No battery'
+            },
+            'battery_not_detected': {
+                'ru': 'Батарея не обнаружена',
+                'en': 'Battery not detected'
+            },
+            'power_connected': {
+                'ru': 'Текущая сессия: питание подключено',
+                'en': 'Current session: power connected'
+            },
+            'session_inactive': {
+                'ru': 'Текущая сессия: неактивна',
+                'en': 'Current session: inactive'
+            },
+            'current_session': {
+                'ru': 'Текущая сессия: ',
+                'en': 'Current session: '
+            },
+            'reset_record': {
+                'ru': 'Сбросить рекорд',
+                'en': 'Reset record'
+            },
+            'positions': {
+                'left-after-activities': {
+                    'ru': 'Слева (после Обзора)',
+                    'en': 'Left (after Activities)'
+                },
+                'before-clock': {
+                    'ru': 'По центру (перед часами)',
+                    'en': 'Center (before clock)'
+                },
+                'after-clock': {
+                    'ru': 'По центру (после часов)',
+                    'en': 'Center (after clock)'
+                },
+                'before-tray': {
+                    'ru': 'Справа (перед индикаторами)',
+                    'en': 'Right (before indicators)'
+                }
+            }
+        };
+        
+        const keys = key.split('.');
+        let result = texts;
+        for (const k of keys) {
+            if (result && result[k]) {
+                result = result[k];
+            } else {
+                return key;
+            }
+        }
+        
+        if (typeof result === 'object' && result[lang]) {
+            return result[lang];
+        }
+        return typeof result === 'string' ? result : key;
+    }
+
     updateTracker(tracker) {
         this._tracker = tracker;
     }
@@ -50,12 +139,13 @@ export class UIManager {
         if (!this._indicator) return;
         this._isLoading = true;
         this._icon.icon_name = 'battery-good-symbolic';
-        this._label.text = ' Загрузка...';
-        this._sessionItem.label.text = 'Подключение к UPower...';
+        this._label.text = this._getLocalizedText('loading');
+        this._sessionItem.label.text = this._getLocalizedText('connecting_upower');
         if (this._tracker) {
-            this._recordItem.label.text = `Рекорд: ${formatDuration(this._tracker.snapshot().record)}`;
+            this._recordItem.label.text = this._getLocalizedText('record') + 
+                formatDuration(this._tracker.snapshot().record);
         } else {
-            this._recordItem.label.text = 'Рекорд: 0';
+            this._recordItem.label.text = this._getLocalizedText('record') + '0';
         }
     }
 
@@ -88,7 +178,8 @@ export class UIManager {
         });
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._indicator.menu.addAction('Сбросить рекорд', () => this._onResetRecord());
+        this._indicator.menu.addAction(this._getLocalizedText('reset_record'), 
+            () => this._onResetRecord());
 
         const placement = PANEL_PLACEMENT[this._position] || PANEL_PLACEMENT['before-tray'];
         Main.panel.addToStatusArea(uuid, this._indicator, placement.position, placement.box);
@@ -97,13 +188,7 @@ export class UIManager {
     }
 
     _getPositionLabel(pos) {
-        const map = {
-            'left-after-activities': 'Слева (после Обзора)',
-            'before-clock': 'По центру (перед часами)',
-            'after-clock': 'По центру (после часов)',
-            'before-tray': 'Справа (перед индикаторами)',
-        };
-        return map[pos] || pos;
+        return this._getLocalizedText(`positions.${pos}`);
     }
 
     refresh(state) {
@@ -130,24 +215,25 @@ export class UIManager {
         });
 
         if (!state.available) {
-            this._label.text = ' Нет данных';
-            this._sessionItem.label.text = 'UPower недоступен';
+            this._label.text = this._getLocalizedText('upower_unavailable');
+            this._sessionItem.label.text = this._getLocalizedText('upower_unavailable');
         } else if (!state.hasBattery) {
-            this._label.text = ' Нет батареи';
-            this._sessionItem.label.text = 'Батарея не обнаружена';
+            this._label.text = this._getLocalizedText('no_battery');
+            this._sessionItem.label.text = this._getLocalizedText('battery_not_detected');
         } else if (!state.onBattery) {
             this._label.text = '';
-            this._sessionItem.label.text = 'Текущая сессия: питание подключено';
+            this._sessionItem.label.text = this._getLocalizedText('power_connected');
         } else if (!state.sessionActive) {
             this._label.text = '';
-            this._sessionItem.label.text = 'Текущая сессия: неактивна';
+            this._sessionItem.label.text = this._getLocalizedText('session_inactive');
         } else {
             const duration = formatDuration(state.elapsedSeconds);
             this._label.text = ` ${duration}`;
-            this._sessionItem.label.text = `Текущая сессия: ${duration}`;
+            this._sessionItem.label.text = this._getLocalizedText('current_session') + duration;
         }
 
-        this._recordItem.label.text = `Рекорд: ${formatDuration(state.record)}`;
+        this._recordItem.label.text = this._getLocalizedText('record') + 
+            formatDuration(state.record);
     }
 
     rebuild(position, uuid) {

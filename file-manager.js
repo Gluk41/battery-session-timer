@@ -1,5 +1,6 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import { PANEL_POSITIONS } from './core.js';
 
 export class FileManager {
     constructor(recordFile, settingsFile, sessionFile) {
@@ -145,7 +146,11 @@ export class FileManager {
         try {
             const parsed = JSON.parse(data);
             const position = parsed.position || 'before-tray';
-            return { position, valid: true };
+            const valid = PANEL_POSITIONS.includes(position);
+            return { 
+                position: valid ? position : 'before-tray', 
+                valid: valid 
+            };
         } catch (e) {
             return { position: 'before-tray', valid: false };
         }

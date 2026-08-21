@@ -69,7 +69,7 @@ export default class BatteryTimerExtension extends Extension {
             this._fileManager.loadSettings()
         ]);
 
-        this._position = settingsData.position;
+        this._position = settingsData.position || 'before-tray';
         const resumeSeconds = sessionData.active ? sessionData.elapsedSeconds : 0;
         const resumedChargePercent = sessionData.active ? sessionData.chargePercent : null;
 
