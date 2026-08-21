@@ -34,7 +34,7 @@ Sleep time (hibernation) is NOT counted – only active battery time is tracked.
       - По центру (перед часами)
       - По центру (после часов)
       - Справа (перед системными индикаторами)
-  • Меню на русском языке
+  • Меню на русском и английском языках
   • Поддержка GNOME Shell 45–50
 
 **English:**
@@ -49,7 +49,7 @@ Sleep time (hibernation) is NOT counted – only active battery time is tracked.
       - Center (before clock)
       - Center (after clock)
       - Right (before system indicators)
-  • Russian language menu
+  • Menu in Russian and English
   • GNOME Shell 45–50 support
 
 ---
@@ -71,8 +71,8 @@ Sleep time (hibernation) is NOT counted – only active battery time is tracked.
   2. Распакуйте архив в каталог расширений пользователя:
        mkdir -p ~/.local/share/gnome-shell/extensions
        cd ~/.local/share/gnome-shell/extensions
-       unzip ~/Загрузки/battery-session-timer-gnome.zip
-     (замените путь к ZIP-архиву на фактический)
+       unzip ~/battery-session-timer-gnome.zip
+     (замените путь ~/ на фактический, если архив находится в другой папке)
   3. Выйдите из системы и войдите снова (или перезагрузите компьютер)
   4. Включите расширение:
        gnome-extensions enable battery-session-timer@local
@@ -92,8 +92,8 @@ Method 2. Manual installation (from ZIP archive)
   2. Extract the archive to the user extensions directory:
        mkdir -p ~/.local/share/gnome-shell/extensions
        cd ~/.local/share/gnome-shell/extensions
-       unzip ~/Загрузки/battery-session-timer-gnome.zip
-     (replace the ZIP path with the actual one)
+       unzip ~/battery-session-timer-gnome.zip
+     (replace the ~/ path with the actual one if the archive is in a different folder)
   3. Log out and log back in (or reboot) to apply changes
   4. Enable the extension:
        gnome-extensions enable battery-session-timer@local
@@ -121,20 +121,28 @@ After installation, click the panel icon to open the menu:
 Файлы данных | Data files
 ---------
 **Русский:**
-Настройки и данные сохраняются в файлах:
-  ~/.config/battery-session-timer-record          – рекорд (в секундах)
-  ~/.config/battery-session-timer-session.json    – состояние текущей сессии
-  ~/.config/battery-session-timer-settings.json   – положение в панели
+Настройки и данные сохраняются в папке:
+  ~/.config/battery-session-timer/
 
-Удалите их, если хотите полностью очистить данные.
+Файлы внутри папки:
+  record          – рекорд (в секундах)
+  session.json    – состояние текущей сессии
+  settings.json   – положение в панели
+
+Удалите всю папку, если хотите полностью очистить данные:
+  rm -rf ~/.config/battery-session-timer/
 
 **English:**
 Settings and data are stored in:
-  ~/.config/battery-session-timer-record          – record (in seconds)
-  ~/.config/battery-session-timer-session.json    – current session state
-  ~/.config/battery-session-timer-settings.json   – panel position
+  ~/.config/battery-session-timer/
 
-Delete them to completely reset all data.
+Files inside the folder:
+  record          – record (in seconds)
+  session.json    – current session state
+  settings.json   – panel position
+
+Delete the entire folder to completely reset all data:
+  rm -rf ~/.config/battery-session-timer/
 
 ---
 
