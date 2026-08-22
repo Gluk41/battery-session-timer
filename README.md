@@ -2,8 +2,9 @@
  Battery Session Timer – GNOME Shell Extension
 ==================================================
 
-<img width="538" height="465" alt="Снимок экрана от 2026-08-12 12-10-54" src="https://github.com/user-attachments/assets/0535dea1-47fd-42f8-985a-201a28b849c0" />
-![Uploading Screenshot From 2026-08-22 14-38-59.png…]()
+<img width="538" height="465" alt="Снимок экрана от 2026-08-12 12-10-54" src="https://github.com/user-attachments/assets/0535dea1-47fd-42f8-985a-201a28b849c0" /><img width="400" height="457" alt="Screenshot From 2026-08-22 14-38-59" src="https://github.com/user-attachments/assets/45e62d28-bab1-4065-aa80-c6717e06e788" />
+
+
 
 Назначение | Purpose
 ----------
