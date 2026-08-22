@@ -3,6 +3,7 @@
 ==================================================
 
 <img width="538" height="465" alt="Снимок экрана от 2026-08-12 12-10-54" src="https://github.com/user-attachments/assets/0535dea1-47fd-42f8-985a-201a28b849c0" />
+![Uploading Screenshot From 2026-08-22 14-38-59.png…]()
 
 Назначение | Purpose
 ----------
