@@ -62,7 +62,6 @@ Sleep time (hibernation) is NOT counted – only active battery time is tracked.
 ---------
 **Русский:**
 
-Способ 1. Установка через gnome-extensions (рекомендуемый)
   1. Скачайте архив battery-session-timer-gnome.zip
   2. Переместите его в домашнюю папку (home)
   3. Выполните в терминале:
@@ -70,37 +69,14 @@ Sleep time (hibernation) is NOT counted – only active battery time is tracked.
   4. Выйдите из системы и войдите снова (или перезагрузите компьютер)
   5. Откройте менеджер расширений и включите расширение
 
-Способ 2. Ручная установка (из ZIP-архива)
-  1. Скачайте архив расширения
-  2. Распакуйте архив в каталог расширений пользователя:
-       mkdir -p ~/.local/share/gnome-shell/extensions
-       cd ~/.local/share/gnome-shell/extensions
-       unzip ~/battery-session-timer-gnome.zip
-     (замените путь ~/ на фактический, если архив находится в другой папке)
-  3. Выйдите из системы и войдите снова (или перезагрузите компьютер)
-  4. Включите расширение:
-       gnome-extensions enable battery-session-timer@local
-
 **English:**
 
-Method 1. Install via gnome-extensions (recommended)
   1. Download the battery-session-timer-gnome.zip archive
   2. Move it to your home folder
   3. Run in terminal:
        gnome-extensions install --force ~/battery-session-timer-gnome.zip
   4. Log out and log back in (or reboot)
   5. Open the Extensions app and enable the extension
-
-Method 2. Manual installation (from ZIP archive)
-  1. Download the extension archive
-  2. Extract the archive to the user extensions directory:
-       mkdir -p ~/.local/share/gnome-shell/extensions
-       cd ~/.local/share/gnome-shell/extensions
-       unzip ~/battery-session-timer-gnome.zip
-     (replace the ~/ path with the actual one if the archive is in a different folder)
-  3. Log out and log back in (or reboot) to apply changes
-  4. Enable the extension:
-       gnome-extensions enable battery-session-timer@local
 
 ---
 
