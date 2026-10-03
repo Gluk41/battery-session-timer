@@ -73,7 +73,7 @@ export default class BatteryTimerExtension extends Extension {
         if (active && this._powerManager) {
             chargePercent = this._powerManager.getCurrentCharge();
         }
-        this._fileManager.saveSessionSync(
+        this._fileManager.saveSession(
             active,
             active ? state.elapsedSeconds : 0,
             chargePercent
@@ -135,7 +135,7 @@ export default class BatteryTimerExtension extends Extension {
         if (this._tracker) {
             this._tracker.finish(GLib.get_monotonic_time());
             this._uiManager.refresh(this._tracker.snapshot());
-            this._saveStateSync(this._tracker.snapshot());
+            this._saveState(this._tracker.snapshot());
         }
     }
 
@@ -165,7 +165,7 @@ export default class BatteryTimerExtension extends Extension {
                     const state = this._tracker.snapshot();
                     this._uiManager.refresh(state);
                     if (state.sessionActive) {
-                        this._saveStateSync(state);
+                        this._saveState(state);
                     }
                 }
                 return GLib.SOURCE_CONTINUE;

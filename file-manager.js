@@ -67,58 +67,26 @@ export class FileManager {
         });
     }
 
-    saveSettingsSync(position) {
-        try {
-            if (!PANEL_POSITIONS.includes(position)) {
-                position = 'before-tray';
-            }
-            const payload = JSON.stringify({ position });
-            if (!this._ensureDirectory(this._settingsFile)) {
-                return false;
-            }
-            const file = Gio.File.new_for_path(this._settingsFile);
-            const bytes = new TextEncoder().encode(payload);
-            file.replace_contents(
-                bytes,
-                null,
-                false,
-                Gio.FileCreateFlags.REPLACE_DESTINATION,
-                null
-            );
-            return true;
-        } catch (e) {
-            return false;
+    async saveSettings(position) {
+        if (!PANEL_POSITIONS.includes(position)) {
+            position = 'before-tray';
         }
+        const payload = JSON.stringify({ position });
+        return this._saveFileAsync(this._settingsFile, payload);
     }
 
-    saveSessionSync(active, elapsedSeconds, chargePercent) {
-        try {
-            const safeElapsed = Number.isSafeInteger(elapsedSeconds) && elapsedSeconds >= 0
-                ? elapsedSeconds
-                : 0;
-            const payload = JSON.stringify({
-                active: Boolean(active),
-                elapsedSeconds: safeElapsed,
-                chargePercent: chargePercent !== null && chargePercent !== undefined
-                    ? Number(chargePercent)
-                    : null
-            });
-            if (!this._ensureDirectory(this._sessionFile)) {
-                return false;
-            }
-            const file = Gio.File.new_for_path(this._sessionFile);
-            const bytes = new TextEncoder().encode(payload);
-            file.replace_contents(
-                bytes,
-                null,
-                false,
-                Gio.FileCreateFlags.REPLACE_DESTINATION,
-                null
-            );
-            return true;
-        } catch (e) {
-            return false;
-        }
+    async saveSession(active, elapsedSeconds, chargePercent) {
+        const safeElapsed = Number.isSafeInteger(elapsedSeconds) && elapsedSeconds >= 0
+            ? elapsedSeconds
+            : 0;
+        const payload = JSON.stringify({
+            active: Boolean(active),
+            elapsedSeconds: safeElapsed,
+            chargePercent: chargePercent !== null && chargePercent !== undefined
+                ? Number(chargePercent)
+                : null
+        });
+        return this._saveFileAsync(this._sessionFile, payload);
     }
 
     async loadRecord() {
@@ -152,11 +120,6 @@ export class FileManager {
         }
     }
 
-    async saveSession(active, elapsedSeconds, chargePercent) {
-        const payload = JSON.stringify({ active, elapsedSeconds, chargePercent });
-        return this._saveFileAsync(this._sessionFile, payload);
-    }
-
     async deleteSession() {
         const file = Gio.File.new_for_path(this._sessionFile);
         if (file.query_exists(null)) {
@@ -177,16 +140,12 @@ export class FileManager {
             const parsed = JSON.parse(data);
             const position = parsed.position || 'before-tray';
             const valid = PANEL_POSITIONS.includes(position);
-            return { 
-                position: valid ? position : 'before-tray', 
-                valid: valid 
+            return {
+                position: valid ? position : 'before-tray',
+                valid: valid
             };
         } catch (e) {
             return { position: 'before-tray', valid: false };
         }
-    }
-
-    async saveSettings(position) {
-        return this._saveFileAsync(this._settingsFile, JSON.stringify({ position }));
     }
 }
