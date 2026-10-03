@@ -2,7 +2,7 @@
   "name": "Battery Session Timer",
   "description": "Battery session timer with record saving for GNOME Shell",
   "uuid": "battery-session-timer@local",
-  "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version": 17,
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "version": 18,
   "url": "https://github.com/Gluk41/battery-session-timer"
 }
