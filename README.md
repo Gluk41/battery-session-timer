@@ -38,8 +38,8 @@ Sleep time (hibernation) is NOT counted – only active battery time is tracked.
       - По центру (перед часами)
       - По центру (после часов)
       - Справа (перед системными индикаторами)
-  • Меню на русском и английском языках
-  • Поддержка GNOME Shell 45–50
+  • Меню на русском и английском языках, галочка у текущей позиции
+  • Поддержка GNOME Shell 45–51
 
 **English:**
   • Display battery runtime in the panel (icon + time)
@@ -53,8 +53,8 @@ Sleep time (hibernation) is NOT counted – only active battery time is tracked.
       - Center (before clock)
       - Center (after clock)
       - Right (before system indicators)
-  • Menu in Russian and English
-  • GNOME Shell 45–50 support
+  • Menu in Russian and English, check mark for the active position
+  • GNOME Shell 45–51 support
 
 ---
 
@@ -141,13 +141,13 @@ Delete the entire folder to completely reset all data:
 Совместимость | Compatibility
 ---------
 **Русский:**
-  • GNOME Shell версии 45, 46, 47, 48, 49, 50
+  • GNOME Shell версии 45, 46, 47, 48, 49, 50, 51
   • Поддерживаемые дистрибутивы: любые с GNOME (Ubuntu, Fedora, Bazzite,
     Arch Linux, openSUSE и другие)
   • Требуется UPower и logind (обычно присутствуют по умолчанию)
 
 **English:**
-  • GNOME Shell versions 45, 46, 47, 48, 49, 50
+  • GNOME Shell versions 45, 46, 47, 48, 49, 50, 51
   • Supported distributions: any with GNOME (Ubuntu, Fedora, Bazzite,
     Arch Linux, openSUSE, and others)
   • Requires UPower and logind (usually present by default)

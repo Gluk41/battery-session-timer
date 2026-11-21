@@ -1,6 +1,11 @@
-import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
-import { PANEL_POSITIONS } from './core.js';
+import {
+    DEFAULT_POSITION,
+    PANEL_POSITIONS,
+    decodePosition,
+    decodeRecord,
+    decodeSession,
+} from './core.js';
 
 export class FileManager {
     constructor(recordFile, settingsFile, sessionFile) {
@@ -68,14 +73,14 @@ export class FileManager {
     }
 
     async saveSettings(position) {
-        if (!PANEL_POSITIONS.includes(position)) {
-            position = 'before-tray';
-        }
+        if (!PANEL_POSITIONS.includes(position))
+            position = DEFAULT_POSITION;
+
         const payload = JSON.stringify({ position });
         return this._saveFileAsync(this._settingsFile, payload);
     }
 
-    async saveSession(active, elapsedSeconds, chargePercent) {
+    async saveSession(active, elapsedSeconds, chargePercent, recordSuppressed = false) {
         const safeElapsed = Number.isSafeInteger(elapsedSeconds) && elapsedSeconds >= 0
             ? elapsedSeconds
             : 0;
@@ -84,17 +89,17 @@ export class FileManager {
             elapsedSeconds: safeElapsed,
             chargePercent: chargePercent !== null && chargePercent !== undefined
                 ? Number(chargePercent)
-                : null
+                : null,
+            recordSuppressed: Boolean(recordSuppressed),
         });
         return this._saveFileAsync(this._sessionFile, payload);
     }
 
     async loadRecord() {
         const data = await this._loadFileAsync(this._recordFile);
-        if (data === null) return { value: 0, valid: true };
-        const value = Number(data.trim());
-        const valid = Number.isSafeInteger(value) && value >= 0;
-        return { value: valid ? value : 0, valid };
+        if (data === null)
+            return { value: 0, valid: true };
+        return decodeRecord(data);
     }
 
     async saveRecord(record) {
@@ -103,21 +108,11 @@ export class FileManager {
 
     async loadSession() {
         const data = await this._loadFileAsync(this._sessionFile);
-        if (data === null) return { active: false, elapsedSeconds: 0, chargePercent: null };
-        try {
-            const parsed = JSON.parse(data);
-            return {
-                active: typeof parsed.active === 'boolean' ? parsed.active : false,
-                elapsedSeconds: Number.isSafeInteger(parsed.elapsedSeconds) && parsed.elapsedSeconds >= 0
-                    ? parsed.elapsedSeconds
-                    : 0,
-                chargePercent: typeof parsed.chargePercent === 'number' && parsed.chargePercent >= 0 && parsed.chargePercent <= 100
-                    ? parsed.chargePercent
-                    : null,
-            };
-        } catch (e) {
-            return { active: false, elapsedSeconds: 0, chargePercent: null };
-        }
+        if (data === null)
+            return decodeSession('{}').value;
+
+        const { value, valid } = decodeSession(data);
+        return { ...value, valid };
     }
 
     async deleteSession() {
@@ -135,17 +130,10 @@ export class FileManager {
 
     async loadSettings() {
         const data = await this._loadFileAsync(this._settingsFile);
-        if (data === null) return { position: 'before-tray', valid: true };
-        try {
-            const parsed = JSON.parse(data);
-            const position = parsed.position || 'before-tray';
-            const valid = PANEL_POSITIONS.includes(position);
-            return {
-                position: valid ? position : 'before-tray',
-                valid: valid
-            };
-        } catch (e) {
-            return { position: 'before-tray', valid: false };
-        }
+        if (data === null)
+            return { position: DEFAULT_POSITION, valid: true };
+
+        const { value, valid } = decodePosition(data);
+        return { position: value, valid };
     }
 }

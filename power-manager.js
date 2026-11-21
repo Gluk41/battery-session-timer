@@ -6,10 +6,17 @@ const UPOWER_PATH = '/org/freedesktop/UPower';
 const DISPLAY_DEVICE_PATH = '/org/freedesktop/UPower/devices/DisplayDevice';
 const LOGIND_NAME = 'org.freedesktop.login1';
 const LOGIND_PATH = '/org/freedesktop/login1';
+// Состояния устройства в UPower; используются и в UI для выбора иконки.
+// UPower device states; also used by the UI to pick the icon.
+export const UPOWER_STATE_CHARGING = 1;
+export const UPOWER_STATE_FULLY_CHARGED = 4;
+
 const BATTERY_DEVICE_TYPE = 2;
-const UPOWER_STATE_CHARGING = 1;
-const UPOWER_STATE_FULLY_CHARGED = 4;
 const CHARGE_CHANGE_THRESHOLD_PERCENT = 3;
+
+// Опрос — только страховка на случай, если UPower не прислал сигнал.
+// Основной путь — g-properties-changed. Polling is a safety net only.
+const WATCHDOG_POLL_SECONDS = 30;
 
 const UPowerProxy = Gio.DBusProxy.makeProxyWrapper(`
 <node>
@@ -111,7 +118,7 @@ export class PowerManager {
         }
         this._pollTimer = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
-            1,
+            WATCHDOG_POLL_SECONDS,
             () => {
                 if (this._upowerProxy && this._deviceProxy) {
                     this._syncPowerState();
@@ -199,32 +206,44 @@ export class PowerManager {
             const currentCharge = Number(this._deviceProxy.Percentage);
 
             const oldState = this._tracker.snapshot();
+
+            // Якорь имеет смысл только пока сессия активна;
+            // иначе он может «выстрелить» в будущей сессии.
+            // The anchor is only meaningful while a session is running.
+            if (this._resumedChargePercent !== null && !oldState.sessionActive)
+                this._resumedChargePercent = null;
+
             this._tracker.setPowerState({
                 available: true,
                 hasBattery,
                 onBattery
             }, GLib.get_monotonic_time());
 
-            if (this._onDeviceProxy && this._deviceProxy) {
-                this._onDeviceProxy(this._deviceProxy);
-            }
-
-            if (onBattery && this._resumedChargePercent !== null) {
-                if (!isNaN(currentCharge) && currentCharge >= 0 && currentCharge <= 100) {
-                    const diff = currentCharge - this._resumedChargePercent;
-                    if (diff > CHARGE_CHANGE_THRESHOLD_PERCENT) {
-                        this._onChargeChange();
-                        this._tracker.finish(GLib.get_monotonic_time());
-                        this._resumedChargePercent = null;
-                        this._onUiRefresh(this._tracker.snapshot());
-                        return;
-                    }
+            // Заряд вырос больше чем на порог — значит аккумулятор заряжали,
+            // то есть сессию прервали. Проверка не зависит от текущего
+            // источника питания: после зарядки ноутбук может быть на сети.
+            // A charge growth above the threshold means the battery was charged,
+            // so the session is over. Works both on AC and on battery.
+            if (this._resumedChargePercent !== null &&
+                !isNaN(currentCharge) && currentCharge >= 0 && currentCharge <= 100) {
+                const diff = currentCharge - this._resumedChargePercent;
+                if (diff > CHARGE_CHANGE_THRESHOLD_PERCENT) {
+                    this._resumedChargePercent = null;
+                    // Завершение сессии, сохранение и обновление UI —
+                    // ответственность расширения, не этого слоя.
+                    // Session finish, saving and UI refresh belong to the extension.
+                    this._onChargeChange();
+                    return;
                 }
             }
 
             const newState = this._tracker.snapshot();
+            // elapsedSeconds меняется каждую секунду — запись файла по нему
+            // дублировала бы таймер расширения. Сохраняем только переходы.
+            // elapsedSeconds changes every second; only transitions are saved.
             if (oldState.sessionActive !== newState.sessionActive ||
-                oldState.elapsedSeconds !== newState.elapsedSeconds) {
+                oldState.available !== newState.available ||
+                oldState.hasBattery !== newState.hasBattery) {
                 this._onStateChange(newState);
             }
             this._onUiRefresh(newState);
@@ -282,6 +301,17 @@ export class PowerManager {
     _onUPowerVanished() {
         this._proxyGeneration++;
         this._clearUPowerProxies();
+
+        // Сообщаем трекеру, что UPower пропал: время перестаёт начисляться,
+        // а UI сможет показать «UPower недоступен».
+        // Report the missing UPower so the UI can show "UPower unavailable".
+        this._tracker.setPowerState({
+            available: false,
+            hasBattery: false,
+            onBattery: false
+        }, GLib.get_monotonic_time());
+        this._onUiRefresh(this._tracker.snapshot());
+
         this._scheduleReconnect();
     }
 

@@ -7,11 +7,27 @@ export const PANEL_POSITIONS = Object.freeze([
     'before-tray',
 ]);
 
+// Единственное место, где описано, куда кладётся индикатор.
+// The single source of truth for indicator placement.
+export const PANEL_PLACEMENT = Object.freeze({
+    'left-after-activities': Object.freeze({position: 1, box: 'left'}),
+    'before-clock': Object.freeze({position: 0, box: 'center'}),
+    'after-clock': Object.freeze({position: -1, box: 'center'}),
+    'before-tray': Object.freeze({position: 0, box: 'right'}),
+});
+
+// Единицы по умолчанию — русские; английские передаёт UIManager.
+// Default units are Russian; the UI layer passes localized ones.
+export const DEFAULT_DURATION_UNITS = Object.freeze({hours: 'ч', minutes: 'м'});
+
 const MICROSECONDS_PER_SECOND = 1_000_000;
 
 export function decodeRecord(contents) {
-    const value = Number(String(contents).trim());
-    const valid = Number.isSafeInteger(value) && value >= 0;
+    // Пустой файл не считается валидным рекордом: Number('') === 0.
+    // An empty file is not a valid record: Number('') === 0.
+    const text = String(contents).trim();
+    const value = Number(text);
+    const valid = text.length > 0 && Number.isSafeInteger(value) && value >= 0;
 
     return {
         value: valid ? value : 0,
@@ -37,26 +53,42 @@ export function decodePosition(contents) {
 }
 
 export function decodeSession(contents) {
+    const fallback = {
+        active: false,
+        elapsedSeconds: 0,
+        chargePercent: null,
+        recordSuppressed: false,
+    };
+
     try {
-        const {active, elapsedSeconds} = JSON.parse(String(contents));
+        const {active, elapsedSeconds, chargePercent, recordSuppressed} =
+            JSON.parse(String(contents));
         const valid = typeof active === 'boolean' &&
             Number.isSafeInteger(elapsedSeconds) && elapsedSeconds >= 0;
 
         return {
             value: valid
-                ? {active, elapsedSeconds}
-                : {active: false, elapsedSeconds: 0},
+                ? {
+                    active,
+                    elapsedSeconds,
+                    chargePercent: typeof chargePercent === 'number' &&
+                        chargePercent >= 0 && chargePercent <= 100
+                        ? chargePercent
+                        : null,
+                    recordSuppressed: recordSuppressed === true,
+                }
+                : {...fallback},
             valid,
         };
     } catch (error) {
         return {
-            value: {active: false, elapsedSeconds: 0},
+            value: {...fallback},
             valid: false,
         };
     }
 }
 
-export function formatDuration(seconds) {
+export function formatDuration(seconds, units = DEFAULT_DURATION_UNITS) {
     const safeSeconds = Number.isFinite(seconds) && seconds >= 0
         ? Math.floor(seconds)
         : 0;
@@ -64,9 +96,9 @@ export function formatDuration(seconds) {
     const minutes = Math.floor((safeSeconds % 3600) / 60);
 
     if (hours === 0)
-        return `${minutes}м`;
+        return `${minutes}${units.minutes}`;
 
-    return `${hours}ч ${minutes}м`;
+    return `${hours}${units.hours} ${minutes}${units.minutes}`;
 }
 
 export function getBatteryIconName({
@@ -97,14 +129,15 @@ export function getBatteryIconName({
 }
 
 export class BatterySessionTracker {
-    constructor(record = 0, resumeElapsedSeconds = 0, resumeActive = false) {
+    constructor(record = 0, resumeElapsedSeconds = 0, resumeActive = false,
+                resumeRecordSuppressed = false) {
         this._record = decodeRecord(record).value;
         this._available = false;
         this._hasBattery = false;
         this._onBattery = false;
         this._sleeping = false;
         this._sessionActive = false;
-        this._recordEligible = true;
+        this._recordSuppressed = false;
         this._elapsedUs = 0;
         this._segmentStartUs = null;
 
@@ -113,15 +146,19 @@ export class BatterySessionTracker {
             ? resumeElapsedSeconds * MICROSECONDS_PER_SECOND
             : 0;
 
+        // Подавление записи восстанавливается из session.json: без этого
+        // сброс рекорда откатывался бы при следующем запуске расширения.
+        // Record suppression is restored from session.json so that a reset
+        // is not undone by the resume logic on the next start.
+        this._resumeSuppressed = Boolean(resumeRecordSuppressed) &&
+            this._pendingResumeUs > 0;
+
         if (this._pendingResumeUs > 0 && resumeActive) {
             this._sessionActive = true;
+            this._recordSuppressed = this._resumeSuppressed;
             this._elapsedUs = this._pendingResumeUs;
             this._pendingResumeUs = 0;
-
-            const elapsedSeconds = Math.floor(this._elapsedUs / MICROSECONDS_PER_SECOND);
-            if (elapsedSeconds > this._record) {
-                this._record = elapsedSeconds;
-            }
+            this._maybeUpdateRecord();
         }
     }
 
@@ -152,11 +189,8 @@ export class BatterySessionTracker {
         }
 
         if (!wasOnBattery && this._onBattery) {
-            if (!this._sessionActive) {
-                this._sessionActive = true;
-                this._recordEligible = true;
-                this._segmentStartUs = this._sleeping ? null : now;
-            }
+            if (!this._sessionActive)
+                this._startSession(now);
             return this.snapshot();
         }
 
@@ -202,8 +236,10 @@ export class BatterySessionTracker {
     resetRecord() {
         this._record = 0;
 
-        if (this._sessionActive)
-            this._recordEligible = false;
+        if (this._sessionActive) {
+            this._recordSuppressed = true;
+            this._resumeSuppressed = true;
+        }
 
         return this.snapshot();
     }
@@ -221,7 +257,8 @@ export class BatterySessionTracker {
             onBattery: this._onBattery,
             sleeping: this._sleeping,
             sessionActive: this._sessionActive,
-            recordEligible: this._recordEligible,
+            recordEligible: !this._recordSuppressed,
+            recordSuppressed: this._recordSuppressed,
             elapsedSeconds: Math.floor(this._elapsedUs / MICROSECONDS_PER_SECOND),
             record: this._record,
         });
@@ -236,25 +273,25 @@ export class BatterySessionTracker {
 
     _startSession(nowUs) {
         this._sessionActive = true;
-        this._recordEligible = true;
+
         if (this._pendingResumeUs > 0) {
             this._elapsedUs = this._pendingResumeUs;
             this._pendingResumeUs = 0;
+            this._recordSuppressed = this._resumeSuppressed;
+        } else {
+            // Новая сессия — рекорд снова считается с нуля.
+            // Fresh session — the record is counted again.
+            this._recordSuppressed = false;
         }
-        this._segmentStartUs = this._sleeping ? null : nowUs;
 
-        if (this._elapsedUs > 0) {
-            const elapsedSeconds = Math.floor(
-                this._elapsedUs / MICROSECONDS_PER_SECOND
-            );
-            if (elapsedSeconds > this._record)
-                this._record = elapsedSeconds;
-        }
+        this._segmentStartUs = this._sleeping ? null : nowUs;
+        this._maybeUpdateRecord();
     }
 
     _endSession() {
         this._sessionActive = false;
-        this._recordEligible = true;
+        this._recordSuppressed = false;
+        this._resumeSuppressed = false;
         this._elapsedUs = 0;
         this._segmentStartUs = null;
         this._pendingResumeUs = 0;
@@ -267,8 +304,11 @@ export class BatterySessionTracker {
         const delta = Math.max(0, nowUs - this._segmentStartUs);
         this._elapsedUs += delta;
         this._segmentStartUs = nowUs;
+        this._maybeUpdateRecord();
+    }
 
-        if (!this._recordEligible)
+    _maybeUpdateRecord() {
+        if (this._recordSuppressed || this._elapsedUs <= 0)
             return;
 
         const elapsedSeconds = Math.floor(

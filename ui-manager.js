@@ -4,19 +4,28 @@ import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import { formatDuration, getBatteryIconName } from './core.js';
+import {
+    DEFAULT_POSITION,
+    PANEL_PLACEMENT,
+    PANEL_POSITIONS,
+    formatDuration,
+    getBatteryIconName,
+} from './core.js';
+import { UPOWER_STATE_CHARGING, UPOWER_STATE_FULLY_CHARGED } from './power-manager.js';
 
-const PANEL_POSITIONS = ['left-after-activities', 'before-clock', 'after-clock', 'before-tray'];
-const PANEL_PLACEMENT = {
-    'left-after-activities': { position: 1, box: 'left' },
-    'before-clock': { position: 0, box: 'center' },
-    'after-clock': { position: -1, box: 'center' },
-    'before-tray': { position: 0, box: 'right' },
-};
+// Если за это время прокси не появился, показываем «UPower недоступен»
+// вместо бесконечной загрузки. Show a timeout error instead of endless loading.
+const LOADING_TIMEOUT_MS = 5000;
+
+// Задержка создания индикатора в позиции перед лотком: системные индикаторы
+// к этому моменту уже добавлены, иначе порядок перемешивается.
+// Delay for the before-tray position so system indicators are already present.
+const BEFORE_TRAY_DELAY_MS = 1000;
 
 export class UIManager {
     constructor(position, tracker, onSetPosition, onResetRecord) {
-        this._position = position || 'before-tray';
+        this._lang = this._getSystemLanguage();
+        this._position = position || DEFAULT_POSITION;
         this._tracker = tracker;
         this._onSetPosition = onSetPosition;
         this._onResetRecord = onResetRecord;
@@ -26,6 +35,8 @@ export class UIManager {
         this._sessionItem = null;
         this._recordItem = null;
         this._rebuildId = 0;
+        this._createTimeoutId = 0;
+        this._loadingTimeoutId = 0;
         this._deviceProxy = null;
         this._isLoading = true;
     }
@@ -40,8 +51,14 @@ export class UIManager {
         }
     }
 
+    _getDurationUnits() {
+        return this._lang === 'ru'
+            ? { hours: 'ч', minutes: 'м' }
+            : { hours: 'h', minutes: 'm' };
+    }
+
     _getLocalizedText(key) {
-        const lang = this._getSystemLanguage();
+        const lang = this._lang;
         const texts = {
             'loading': {
                 'ru': ' Загрузка...',
@@ -102,7 +119,7 @@ export class UIManager {
                 }
             }
         };
-        
+
         const keys = key.split('.');
         let result = texts;
         for (const k of keys) {
@@ -112,7 +129,7 @@ export class UIManager {
                 return key;
             }
         }
-        
+
         if (typeof result === 'object' && result[lang]) {
             return result[lang];
         }
@@ -130,8 +147,23 @@ export class UIManager {
     setDeviceProxy(proxy) {
         this._deviceProxy = proxy;
         this._isLoading = false;
-        if (this._tracker) {
-            this.refresh(this._tracker.snapshot());
+        this._clearLoadingTimeout();
+        // UI обновит ближайший тик таймера: к этому моменту PowerManager
+        // уже синхронизировал состояние трекера.
+        // The next timer tick refreshes the UI; the tracker is already synced.
+    }
+
+    _clearLoadingTimeout() {
+        if (this._loadingTimeoutId) {
+            GLib.Source.remove(this._loadingTimeoutId);
+            this._loadingTimeoutId = 0;
+        }
+    }
+
+    _clearCreateTimeout() {
+        if (this._createTimeoutId) {
+            GLib.Source.remove(this._createTimeoutId);
+            this._createTimeoutId = 0;
         }
     }
 
@@ -141,15 +173,29 @@ export class UIManager {
         this._icon.icon_name = 'battery-good-symbolic';
         this._label.text = this._getLocalizedText('loading');
         this._sessionItem.label.text = this._getLocalizedText('connecting_upower');
-        if (this._tracker) {
-            this._recordItem.label.text = this._getLocalizedText('record') + 
-                formatDuration(this._tracker.snapshot().record);
-        } else {
-            this._recordItem.label.text = this._getLocalizedText('record') + '0';
+        const record = this._tracker ? this._tracker.snapshot().record : 0;
+        this._recordItem.label.text = this._getLocalizedText('record') +
+            formatDuration(record, this._getDurationUnits());
+
+        if (!this._loadingTimeoutId) {
+            this._loadingTimeoutId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT,
+                LOADING_TIMEOUT_MS,
+                () => {
+                    this._loadingTimeoutId = 0;
+                    this._isLoading = false;
+                    if (this._tracker && this._indicator)
+                        this.refresh(this._tracker.snapshot());
+                    return GLib.SOURCE_REMOVE;
+                }
+            );
         }
     }
 
     _createIndicatorNow(uuid) {
+        if (this._indicator)
+            return;
+
         this._indicator = new PanelMenu.Button(0.5, 'Battery Session Timer', false);
         this._indicator.menu.box.add_style_class_name('battery-session-timer-menu');
 
@@ -173,28 +219,43 @@ export class UIManager {
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         PANEL_POSITIONS.forEach(pos => {
-            const label = this._getPositionLabel(pos);
-            this._indicator.menu.addAction(label, () => this._onSetPosition(pos));
+            const item = this._indicator.menu.addAction(
+                this._getPositionLabel(pos),
+                () => this._onSetPosition(pos)
+            );
+            // Галочка у текущей позиции. Check mark for the active position.
+            if (pos === this._position &&
+                PopupMenu.Ornament && item && item.setOrnament) {
+                item.setOrnament(PopupMenu.Ornament.CHECK);
+            }
         });
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._indicator.menu.addAction(this._getLocalizedText('reset_record'), 
+        this._indicator.menu.addAction(this._getLocalizedText('reset_record'),
             () => this._onResetRecord());
 
-        const placement = PANEL_PLACEMENT[this._position] || PANEL_PLACEMENT['before-tray'];
+        const placement = PANEL_PLACEMENT[this._position] ||
+            PANEL_PLACEMENT[DEFAULT_POSITION];
         Main.panel.addToStatusArea(uuid, this._indicator, placement.position, placement.box);
 
         this.showLoading();
     }
 
     createIndicator(uuid) {
+        this._clearCreateTimeout();
+
         if (this._position === 'before-tray') {
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                if (!this._indicator) {
-                    this._createIndicatorNow(uuid);
+            this._createTimeoutId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT,
+                BEFORE_TRAY_DELAY_MS,
+                () => {
+                    this._createTimeoutId = 0;
+                    if (!this._indicator) {
+                        this._createIndicatorNow(uuid);
+                    }
+                    return GLib.SOURCE_REMOVE;
                 }
-                return GLib.SOURCE_REMOVE;
-            });
+            );
         } else {
             this._createIndicatorNow(uuid);
         }
@@ -210,21 +271,22 @@ export class UIManager {
             return;
         }
 
-        if (this._isLoading || !this._deviceProxy) {
+        if (this._isLoading) {
             this.showLoading();
             return;
         }
 
-        const deviceState = Number(this._deviceProxy.State);
-        const percentage = this._deviceProxy.Percentage;
+        const device = this._deviceProxy;
+        const deviceState = device ? Number(device.State) : NaN;
+        const percentage = device ? device.Percentage : null;
 
         this._icon.icon_name = getBatteryIconName({
             available: state.available,
             hasBattery: state.hasBattery,
             percentage: percentage,
-            charging: deviceState === 1,
-            fullyCharged: deviceState === 4,
-            fallbackIconName: this._deviceProxy.IconName,
+            charging: deviceState === UPOWER_STATE_CHARGING,
+            fullyCharged: deviceState === UPOWER_STATE_FULLY_CHARGED,
+            fallbackIconName: device ? device.IconName : '',
         });
 
         if (!state.available) {
@@ -240,13 +302,13 @@ export class UIManager {
             this._label.text = '';
             this._sessionItem.label.text = this._getLocalizedText('session_inactive');
         } else {
-            const duration = formatDuration(state.elapsedSeconds);
+            const duration = formatDuration(state.elapsedSeconds, this._getDurationUnits());
             this._label.text = ` ${duration}`;
             this._sessionItem.label.text = this._getLocalizedText('current_session') + duration;
         }
 
-        this._recordItem.label.text = this._getLocalizedText('record') + 
-            formatDuration(state.record);
+        this._recordItem.label.text = this._getLocalizedText('record') +
+            formatDuration(state.record, this._getDurationUnits());
     }
 
     rebuild(position, uuid) {
@@ -271,6 +333,8 @@ export class UIManager {
     }
 
     destroyIndicator() {
+        this._clearCreateTimeout();
+        this._clearLoadingTimeout();
         if (this._rebuildId) {
             GLib.Source.remove(this._rebuildId);
             this._rebuildId = 0;
@@ -283,5 +347,6 @@ export class UIManager {
         this._label = null;
         this._sessionItem = null;
         this._recordItem = null;
+        this._deviceProxy = null;
     }
 }
