@@ -129,12 +129,12 @@ Delete the entire folder to completely reset all data:
 Удаление | Removal
 ---------
 **Русский:**
-  gnome-extensions disable battery-session-timer@local
-  rm -rf ~/.local/share/gnome-shell/extensions/battery-session-timer@local
+  gnome-extensions disable battery-session-timer@gluk41.github.io
+  rm -rf ~/.local/share/gnome-shell/extensions/battery-session-timer@gluk41.github.io
 
 **English:**
-  gnome-extensions disable battery-session-timer@local
-  rm -rf ~/.local/share/gnome-shell/extensions/battery-session-timer@local
+  gnome-extensions disable battery-session-timer@gluk41.github.io
+  rm -rf ~/.local/share/gnome-shell/extensions/battery-session-timer@gluk41.github.io
 
 ---
 
